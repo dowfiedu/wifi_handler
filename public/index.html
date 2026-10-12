@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>ইন্টারনেট সংযোগের জন্য অনুরোধ</title>
+  <style>
+    :root {
+      --bg-gradient: linear-gradient(135deg, #0b1120 0%, #0f172a 50%, #1e293b 100%);
+      --card-bg: rgba(30, 41, 59, 0.78);
+      --card-border: rgba(255, 255, 255, 0.12);
+      --accent: #38bdf8;
+      --accent-hover: #0284c7;
+      --accent-glow: rgba(56, 189, 248, 0.25);
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --success: #10b981;
+      --success-glow: rgba(16, 185, 129, 0.25);
+      --error: #ef4444;
+      --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: var(--font-family);
+      background: var(--bg-gradient);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 1.25rem;
+      position: relative;
+      overflow-x: hidden;
+    }
+
+    /* Ambient background glows */
+    .glow-sphere {
+      position: absolute;
+      width: 340px;
+      height: 340px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(56, 189, 248, 0.16) 0%, rgba(56, 189, 248, 0) 70%);
+      top: 10%;
+      left: 50%;
+      transform: translateX(-50%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 440px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .card {
+      background: var(--card-bg);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid var(--card-border);
+      border-radius: 24px;
+      padding: 2.25rem 1.85rem;
+      box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.65);
+      transition: all 0.3s ease;
+    }
+
+    /* Top bar inside card: Network info & Language toggle */
+    .card-top-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1.5rem;
+    }
+
+    .network-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 20px;
+      padding: 0.35rem 0.8rem;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .network-badge svg {
+      width: 14px;
+      height: 14px;
+      color: var(--accent);
+    }
+
+    .network-name {
+      color: var(--text-main);
+      font-weight: 600;
+    }
+
+    .lang-toggle {
+      display: flex;
+      background: rgba(15, 23, 42, 0.8);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 14px;
+      padding: 2px;
+      font-size: 0.75rem;
+    }
+
+    .lang-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      padding: 4px 8px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.2s;
+    }
+
+    .lang-btn.active {
+      background: var(--accent);
+      color: #0f172a;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+
+    .icon-wrapper {
+      width: 68px;
+      height: 68px;
+      margin: 0 auto 1.25rem;
+      background: rgba(56, 189, 248, 0.12);
+      border-radius: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--accent);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      box-shadow: 0 0 24px var(--accent-glow);
+    }
+
+    .icon-wrapper svg {
+      width: 34px;
+      height: 34px;
+    }
+
+    h1 {
+      font-size: 1.55rem;
+      font-weight: 700;
+      letter-spacing: -0.025em;
+      margin-bottom: 0.5rem;
+    }
+
+    p.subtitle {
+      color: var(--text-muted);
+      font-size: 0.875rem;
+      line-height: 1.5;
+    }
+
+    .form-group {
+      margin-bottom: 1.5rem;
+      text-align: left;
+    }
+
+    label {
+      display: block;
+      font-size: 0.875rem;
+      font-weight: 600;
+      color: var(--text-main);
+      margin-bottom: 0.55rem;
+    }
+
+    input[type="text"] {
+      width: 100%;
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 14px;
+      padding: 0.95rem 1.1rem;
+      color: var(--text-main);
+      font-size: 1rem;
+      outline: none;
+      transition: all 0.2s ease;
+    }
+
+    input[type="text"]:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.22);
+    }
+
+    input[type="text"]::placeholder {
+      color: rgba(148, 163, 184, 0.55);
+    }
+
+    .btn {
+      width: 100%;
+      background: var(--accent);
+      color: #0f172a;
+      border: none;
+      border-radius: 14px;
+      padding: 0.95rem 1.25rem;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      transition: all 0.2s ease;
+      box-shadow: 0 4px 14px rgba(56, 189, 248, 0.3);
+      margin-top: 0.5rem;
+    }
+
+    .btn:hover:not(:disabled) {
+      background: var(--accent-hover);
+      color: #ffffff;
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(56, 189, 248, 0.4);
+    }
+
+    .btn:active:not(:disabled) {
+      transform: translateY(0);
+    }
+
+    .btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .spinner {
+      width: 18px;
+      height: 18px;
+      border: 2px solid rgba(15, 23, 42, 0.3);
+      border-top-color: #0f172a;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Alert Boxes */
+    .alert {
+      padding: 0.875rem 1rem;
+      border-radius: 12px;
+      font-size: 0.875rem;
+      margin-bottom: 1.25rem;
+      display: none;
+      line-height: 1.45;
+    }
+
+    .alert-error {
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      color: #fca5a5;
+    }
+
+    /* Confirmation State */
+    .confirmation-view {
+      display: none;
+      text-align: center;
+      animation: fadeIn 0.35s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      color: #6ee7b7;
+      padding: 0.45rem 1rem;
+      border-radius: 9999px;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      margin-bottom: 1.5rem;
+    }
+
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+      animation: pulse 1.6s infinite;
+    }
+
+    @keyframes pulse {
+      0% {
+        box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+      }
+      70% {
+        box-shadow: 0 0 0 8px rgba(16, 185, 129, 0);
+      }
+      100% {
+        box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+      }
+    }
+
+    .status-card {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 16px;
+      padding: 1.15rem 1.25rem;
+      margin: 1.5rem 0;
+      text-align: left;
+    }
+
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.875rem;
+    }
+
+    .status-title {
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .status-highlight {
+      color: #6ee7b7;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    .footer {
+      margin-top: 2rem;
+      text-align: center;
+      font-size: 0.775rem;
+      color: var(--text-muted);
+      letter-spacing: 0.01em;
+    }
+  </style>
+</head>
+<body>
+  <div class="glow-sphere"></div>
+
+  <div class="container">
+    <div class="card">
+      <!-- Card Top Bar: Wi-Fi SSID & Language Selector -->
+      <div class="card-top-bar">
+        <div class="network-badge">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 12.55a11 11 0 0 1 14.08 0"></path>
+            <path d="M1.42 9a16 16 0 0 1 21.16 0"></path>
+            <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
+            <line x1="12" y1="20" x2="12.01" y2="20"></line>
+          </svg>
+          <span id="networkName" class="network-name">ইন্টারনেট</span>
+        </div>
+
+        <div class="lang-toggle">
+          <button id="langEnBtn" class="lang-btn" onclick="setLanguage('en')">EN</button>
+          <button id="langBnBtn" class="lang-btn active" onclick="setLanguage('bn')">বাং</button>
+        </div>
+      </div>
+
+      <!-- VIEW 1: Portal Request Form -->
+      <div id="requestView">
+        <div class="header">
+          <div class="icon-wrapper">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5 12.55a11 11 0 0 1 14.08 0"></path>
+              <path d="M1.42 9a16 16 0 0 1 21.16 0"></path>
+              <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
+              <line x1="12" y1="20" x2="12.01" y2="20"></line>
+            </svg>
+          </div>
+          <h1 id="titleText">ইন্টারনেট সংযোগের জন্য অনুরোধ</h1>
+          <p id="subtitleText" class="subtitle">ইন্টারনেট অ্যাক্সেস পেতে আপনার নাম লিখে নেটওয়ার্ক অ্যাডমিনের কাছে অনুমোদনের অনুরোধ পাঠান।</p>
+        </div>
+
+        <!-- Error Notification Banner -->
+        <div id="errorAlert" class="alert alert-error"></div>
+
+        <form id="accessForm">
+          <div class="form-group">
+            <label id="labelName" for="userName">আপনার পূর্ণ নাম</label>
+            <input
+              type="text"
+              id="userName"
+              name="name"
+              required
+              autocomplete="off"
+              maxlength="64"
+              autofocus
+            />
+          </div>
+
+          <!-- Hidden MAC field (populated from openNDS query params or client fingerprint) -->
+          <input type="hidden" id="clientMac" name="mac" />
+
+          <button type="submit" id="submitBtn" class="btn">
+            <span id="btnText">ইন্টারনেট অ্যাক্সেসের অনুরোধ করুন</span>
+            <div id="btnSpinner" class="spinner" style="display: none;"></div>
+          </button>
+        </form>
+      </div>
+
+      <!-- VIEW 2: Pending Approval Confirmation -->
+      <div id="confirmationView" class="confirmation-view">
+        <div class="status-badge">
+          <span class="pulse-dot"></span>
+          <span id="pendingBadgeText">অ্যাডমিনের কাছে অনুরোধ পাঠানো হয়েছে</span>
+        </div>
+        <div class="icon-wrapper" style="color: var(--success); background: rgba(16, 185, 129, 0.12); border-color: rgba(16, 185, 129, 0.25); box-shadow: 0 0 24px var(--success-glow);">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12"></polyline>
+          </svg>
+        </div>
+        <h1 id="pendingTitleText">অনুমোদনের অপেক্ষায়...</h1>
+        <p class="subtitle" style="margin-bottom: 1.25rem;">
+          <span id="pendingThankText">ধন্যবাদ,</span> <strong id="confirmedName" style="color: var(--text-main);"></strong>। <span id="pendingForwardText">আপনার অনুরোধটি গৃহীত হয়েছে এবং অ্যাডমিনের অনুমোদনের জন্য পাঠানো হয়েছে।</span>
+        </p>
+
+        <div class="status-card">
+          <div class="status-row">
+            <span class="status-title" id="pendingStatusLabel">সংযোগের অবস্থা:</span>
+            <span class="status-highlight" id="pendingStatusValue">
+              <span class="pulse-dot"></span>
+              অনুমোদনের অপেক্ষায়
+            </span>
+          </div>
+        </div>
+
+        <p id="pendingFooterNote" class="subtitle" style="font-size: 0.8125rem;">
+          অ্যাডমিন অনুমোদন দিলে আপনার ইন্টারনেট সংযোগটি স্বয়ংক্রিয়ভাবে সক্রিয় হবে। অনুগ্রহ করে এই পেজটি খোলা রাখুন।
+        </p>
+      </div>
+
+      <div class="footer">
+        Powered by SABBIR MOHAMMAD
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // -------------------------------------------------------------------------
+    // Translations (English & Bangla)
+    // -------------------------------------------------------------------------
+    const translations = {
+      en: {
+        title: "Internet Access Request",
+        subtitle: "Please provide your name to request internet access from the network administrator.",
+        labelName: "Full Name",
+        placeholderName: "",
+        btnSubmit: "Request Internet Access",
+        btnSubmitting: "Sending Request...",
+        pendingBadge: "Request Sent to Admin",
+        pendingTitle: "Pending Approval",
+        pendingThank: "Thank you,",
+        pendingForward: "Your request has been received and forwarded to the administrator.",
+        pendingStatusLabel: "Connection Status:",
+        pendingStatusValue: "Awaiting Approval",
+        pendingFooter: "Once the administrator approves your session, your internet connection will be activated automatically. Please keep this window open.",
+        errorName: "Please enter your full name.",
+        errorDefault: "Failed to submit access request. Please try again."
+      },
+      bn: {
+        title: "ইন্টারনেট সংযোগের জন্য অনুরোধ",
+        subtitle: "ইন্টারনেট অ্যাক্সেস পেতে আপনার নাম লিখে নেটওয়ার্ক অ্যাডমিনের কাছে অনুমোদনের অনুরোধ পাঠান।",
+        labelName: "আপনার পূর্ণ নাম",
+        placeholderName: "",
+        btnSubmit: "ইন্টারনেট অ্যাক্সেসের অনুরোধ করুন",
+        btnSubmitting: "অনুরোধ পাঠানো হচ্ছে...",
+        pendingBadge: "অ্যাডমিনের কাছে অনুরোধ পাঠানো হয়েছে",
+        pendingTitle: "অনুমোদনের অপেক্ষায়...",
+        pendingThank: "ধন্যবাদ,",
+        pendingForward: "আপনার অনুরোধটি গৃহীত হয়েছে এবং অ্যাডমিনের অনুমোদনের জন্য পাঠানো হয়েছে।",
+        pendingStatusLabel: "সংযোগের অবস্থা:",
+        pendingStatusValue: "অনুমোদনের অপেক্ষায়",
+        pendingFooter: "অ্যাডমিন অনুমোদন দিলে আপনার ইন্টারনেট সংযোগটি স্বয়ংক্রিয়ভাবে সক্রিয় হবে। অনুগ্রহ করে এই পেজটি খোলা রাখুন।",
+        errorName: "অনুগ্রহ করে আপনার পুরো নাম লিখুন।",
+        errorDefault: "অনুরোধ পাঠানো সম্ভব হয়নি। পুনরায় চেষ্টা করুন।"
+      }
+    };
+
+    // Default language is Bangla ('bn')
+    let currentLang = 'bn';
+
+    function setLanguage(lang) {
+      currentLang = lang;
+      const t = translations[lang];
+
+      document.getElementById('langEnBtn').classList.toggle('active', lang === 'en');
+      document.getElementById('langBnBtn').classList.toggle('active', lang === 'bn');
+
+      document.getElementById('titleText').textContent = t.title;
+      document.getElementById('subtitleText').textContent = t.subtitle;
+      document.getElementById('labelName').textContent = t.labelName;
+      document.getElementById('userName').placeholder = t.placeholderName;
+      document.getElementById('btnText').textContent = t.btnSubmit;
+      document.getElementById('pendingBadgeText').textContent = t.pendingBadge;
+      document.getElementById('pendingTitleText').textContent = t.pendingTitle;
+      document.getElementById('pendingThankText').textContent = t.pendingThank;
+      document.getElementById('pendingForwardText').textContent = t.pendingForward;
+      document.getElementById('pendingStatusLabel').textContent = t.pendingStatusLabel;
+      document.getElementById('pendingStatusValue').innerHTML = `<span class="pulse-dot"></span> ${t.pendingStatusValue}`;
+      document.getElementById('pendingFooterNote').textContent = t.pendingFooter;
+    }
+
+    // -------------------------------------------------------------------------
+    // openNDS Parameter Extraction (Silent MAC handling)
+    // -------------------------------------------------------------------------
+    const params = new URLSearchParams(window.location.search);
+    const rawMac = params.get('clientmac') || params.get('mac') || params.get('client_mac') || '';
+    const rawIp = params.get('clientip') || params.get('ip') || params.get('client_ip') || '';
+
+    const networkName = document.getElementById('networkName');
+    const clientMacInput = document.getElementById('clientMac');
+    const accessForm = document.getElementById('accessForm');
+    const submitBtn = document.getElementById('submitBtn');
+    const btnText = document.getElementById('btnText');
+    const btnSpinner = document.getElementById('btnSpinner');
+    const errorAlert = document.getElementById('errorAlert');
+
+    const requestView = document.getElementById('requestView');
+    const confirmationView = document.getElementById('confirmationView');
+    const confirmedName = document.getElementById('confirmedName');
+
+    // Helper: Generate or retrieve a persistent mock MAC for local testing when no openNDS query param exists
+    function getOrCreateClientMac() {
+      if (rawMac && rawMac.trim()) {
+        return rawMac.trim().toLowerCase();
+      }
+      let storedMac = localStorage.getItem('opennds_client_mac');
+      if (!storedMac) {
+        // Generate pseudo MAC starting with locally administered prefix 02:xx:xx:xx:xx:xx
+        const bytes = [0x02];
+        for (let i = 0; i < 5; i++) {
+          bytes.push(Math.floor(Math.random() * 256));
+        }
+        storedMac = bytes.map(b => b.toString(16).padStart(2, '0')).join(':');
+        localStorage.setItem('opennds_client_mac', storedMac);
+      }
+      return storedMac;
+    }
+
+    // Set MAC silently in the background
+    const clientMacAddress = getOrCreateClientMac();
+    clientMacInput.value = clientMacAddress;
+
+    // Apply default language on load
+    setLanguage('bn');
+
+    // Ensure input field is clean with active blinking cursor
+    const userNameInput = document.getElementById('userName');
+    userNameInput.value = '';
+    userNameInput.focus();
+
+    // -------------------------------------------------------------------------
+    // Form Submission Handling
+    // -------------------------------------------------------------------------
+    accessForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorAlert.style.display = 'none';
+
+      const name = document.getElementById('userName').value.trim();
+      const t = translations[currentLang];
+
+      if (!name) {
+        showError(t.errorName);
+        return;
+      }
+
+      setLoading(true);
+
+      try {
+        const payload = {
+          name: name,
+          mac: clientMacAddress,
+          ip: rawIp || undefined
+        };
+
+        const res = await fetch('/api/request', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload)
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          throw new Error(data.error || t.errorDefault);
+        }
+
+        // Show Confirmation View without displaying MAC
+        confirmedName.textContent = name;
+        requestView.style.display = 'none';
+        confirmationView.style.display = 'block';
+
+      } catch (err) {
+        showError(err.message || t.errorDefault);
+      } finally {
+        setLoading(false);
+      }
+    });
+
+    function setLoading(isLoading) {
+      submitBtn.disabled = isLoading;
+      const t = translations[currentLang];
+      if (isLoading) {
+        btnText.textContent = t.btnSubmitting;
+        btnSpinner.style.display = 'inline-block';
+      } else {
+        btnText.textContent = t.btnSubmit;
+        btnSpinner.style.display = 'none';
+      }
+    }
+
+    function showError(msg) {
+      errorAlert.textContent = msg;
+      errorAlert.style.display = 'block';
+    }
+  </script>
+</body>
+</html>

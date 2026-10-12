@@ -1,0 +1,24 @@
+{
+  "name": "opennds-telegram-bridge",
+  "version": "1.0.0",
+  "description": "Serverless bridge connecting OpenWrt openNDS captive portal with a Telegram Bot using Upstash Redis on Vercel.",
+  "type": "module",
+  "scripts": {
+    "start": "node dev-server.js",
+    "dev": "node dev-server.js",
+    "test": "node --test test/*.test.js && sh test/test_router_sync.sh"
+  },
+  "keywords": [
+    "opennds",
+    "captive-portal",
+    "telegram-bot",
+    "upstash-redis",
+    "vercel",
+    "serverless"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@upstash/redis": "^1.34.4"
+  }
+}
