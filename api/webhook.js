@@ -28,7 +28,9 @@ import {
   TELEGRAM_INLINE_MENU,
   fetchUserRecords,
   cleanTerminatedRecords,
-  registerBotCommands
+  registerBotCommands,
+  trackChatMessage,
+  clearChatHistory
 } from '../lib/bot-menu.js';
 
 /**
@@ -114,7 +116,7 @@ export async function answerCallbackQuery(botToken, callbackQueryId, text, showA
 /**
  * Helper to send a new message to a Telegram chat.
  */
-export async function sendTelegramMessage(botToken, chatId, text, replyMarkup = null) {
+export async function sendTelegramMessage(botToken, chatId, text, replyMarkup = null, redis = null) {
   if (!botToken || !chatId) return null;
   try {
     const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
@@ -131,7 +133,11 @@ export async function sendTelegramMessage(botToken, chatId, text, replyMarkup = 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-    return await res.json().catch(() => null);
+    const resData = await res.json().catch(() => null);
+    if (resData?.ok && resData?.result?.message_id && redis) {
+      trackChatMessage(redis, chatId, resData.result.message_id).catch(() => {});
+    }
+    return resData;
   } catch (err) {
     console.error('[sendTelegramMessage Failed]', err);
     return null;
@@ -183,9 +189,12 @@ export async function updateTelegramMessage(botToken, message, statusText, inlin
  *
  * @param {string} command - 'dashboard' | 'active' | 'previous' | 'details' | 'clean'
  * @param {object} redis - Redis instance
+ * @param {string} [botToken] - Telegram Bot Token
+ * @param {string|number} [chatId] - Telegram Chat ID
+ * @param {number} [currentMsgId] - Current Telegram message ID triggering the action
  * @returns {Promise<{ text: string, replyMarkup: object, ackText?: string }>}
  */
-export async function processMenuCommand(command, redis) {
+export async function processMenuCommand(command, redis, botToken = null, chatId = null, currentMsgId = null) {
   if (command === 'dashboard') {
     const [users, pendingQueueCount] = await Promise.all([
       fetchUserRecords(redis),
@@ -233,6 +242,12 @@ export async function processMenuCommand(command, redis) {
   }
 
   if (command === 'clean') {
+    // 1. Wipe previous chat conversation history from Telegram
+    if (botToken && chatId) {
+      await clearChatHistory(redis, botToken, chatId, currentMsgId);
+    }
+
+    // 2. Clean terminated database records
     const cleanResult = await cleanTerminatedRecords(redis);
     const [users, pendingQueueCount] = await Promise.all([
       fetchUserRecords(redis),
@@ -242,16 +257,16 @@ export async function processMenuCommand(command, redis) {
     const dashboardText = formatDashboardMessage(activeUsers, Number(pendingQueueCount) || 0);
 
     const cleanNotice = [
-      '🧹 *ড্যাশবোর্ড সফলভাবে ক্লিন করা হয়েছে!*',
+      '🧹 *ড্যাশবোর্ড ও চ্যাট সফলভাবে ক্লিন করা হয়েছে!*',
       '━━━━━━━━━━━━━━━━━━━━',
-      `✅ মোট *${cleanResult.removedCount}* টি টার্মিনেটেড রেকর্ড ড্যাশবোর্ড থেকে মুছে ফেলা হয়েছে।`,
+      `✅ পূর্ববর্তী সকল বার্তা মুছে দেওয়া হয়েছে এবং *${cleanResult.removedCount}* টি টার্মিনেটেড রেকর্ড ডাটাবেজ থেকে অপসারণ করা হয়েছে।`,
       'বর্তমানে ড্যাশবোর্ডে শুধুমাত্র সক্রিয় ব্যবহারকারীদের তথ্য রয়েছে।\n'
     ].join('\n');
 
     return {
       text: `${cleanNotice}\n${dashboardText}`,
       replyMarkup: TELEGRAM_INLINE_MENU,
-      ackText: `🧹 ক্লিন সম্পন্ন! (${cleanResult.removedCount} টি রেকর্ড মোছা হয়েছে)`
+      ackText: `🧹 ক্লিন সম্পন্ন! চ্যাট ও ডাটা ফ্রেশ করা হয়েছে`
     };
   }
 
@@ -343,6 +358,12 @@ export default async function handler(req, res) {
   // ---------------------------------------------------------------------------
   if (message && message.text) {
     const chatId = message.chat?.id;
+    const currentMsgId = message.message_id;
+
+    // Track user message in Redis so it can be purged during Clean Dashboard
+    if (chatId && currentMsgId) {
+      trackChatMessage(redis, chatId, currentMsgId).catch(() => {});
+    }
 
     // Security: Validate authorized chat if TELEGRAM_CHAT_ID is configured in environment
     if (configuredChatId && chatId && String(chatId) !== String(configuredChatId)) {
@@ -370,18 +391,24 @@ export default async function handler(req, res) {
         '• 🟢 *অ্যাক্টিভ ইউজার:* বর্তমানে সংযুক্ত ও সক্রিয় ডিভাইস তালিকা',
         '• 👥 *প্রিভিয়াস ইউজার:* পূর্ববর্তী বা মেয়াদোত্তীর্ণ ইউজারদের তালিকা',
         '• 📋 *ইউজার ডিটেইলস:* প্রতিটি ইউজারের পূর্ণ বিবরণ (নাম, তারিখ, MAC, IP ও টাইমস্ট্যাম্প)',
-        '• 🧹 *ক্লিন ড্যাশবোর্ড:* টার্মিনেট করা সকল ডিভাইস ড্যাশবোর্ড থেকে অপসারণ',
+        '• 🧹 *ক্লিন ড্যাশবোর্ড:* টার্মিনেট করা সকল ডিভাইস ও পূর্ববর্তী চ্যাট বার্তা অপসারণ',
         '',
         '_নিচের কিবোর্ড বাটন বা কমান্ড সিলেক্ট করে কাজ শুরু করুন।_'
       ].join('\n');
 
-      await sendTelegramMessage(botToken, chatId, welcomeText, TELEGRAM_MENU_KEYBOARD);
+      await sendTelegramMessage(botToken, chatId, welcomeText, TELEGRAM_MENU_KEYBOARD, redis);
       return res.status(200).json({ ok: true, action: 'menu_shown' });
     }
 
     if (recognizedCommand && chatId) {
-      const { text, replyMarkup } = await processMenuCommand(recognizedCommand, redis);
-      await sendTelegramMessage(botToken, chatId, text, replyMarkup);
+      const { text, replyMarkup } = await processMenuCommand(
+        recognizedCommand,
+        redis,
+        botToken,
+        chatId,
+        currentMsgId
+      );
+      await sendTelegramMessage(botToken, chatId, text, replyMarkup, redis);
       return res.status(200).json({ ok: true, command: recognizedCommand });
     }
 
@@ -425,12 +452,19 @@ export default async function handler(req, res) {
 
   // Handle Menu callbacks: "menu_dashboard", "menu_active", "menu_previous", "menu_details", "menu_clean"
   if (parsed.action === 'menu') {
-    const { text, replyMarkup, ackText } = await processMenuCommand(parsed.command, redis);
+    const currentMsgId = cbMessage?.message_id;
+    const { text, replyMarkup, ackText } = await processMenuCommand(
+      parsed.command,
+      redis,
+      botToken,
+      cbChatId,
+      currentMsgId
+    );
     await answerCallbackQuery(botToken, callbackQueryId, ackText || '✅ সম্পন্ন হয়েছে', false);
 
-    if (cbMessage?.chat?.id) {
+    if (cbChatId) {
       // Send fresh response with updated view
-      await sendTelegramMessage(botToken, cbMessage.chat.id, text, replyMarkup);
+      await sendTelegramMessage(botToken, cbChatId, text, replyMarkup, redis);
     }
     return res.status(200).json({ ok: true, action: 'menu', command: parsed.command });
   }

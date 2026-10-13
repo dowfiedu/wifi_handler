@@ -17,7 +17,10 @@ import {
   formatPreviousUsersList,
   formatDashboardMessage,
   TELEGRAM_MENU_KEYBOARD,
-  TELEGRAM_INLINE_MENU
+  TELEGRAM_INLINE_MENU,
+  trackChatMessage,
+  deleteTelegramMessages,
+  clearChatHistory
 } from '../lib/bot-menu.js';
 import { normalizeCommandText } from '../api/webhook.js';
 
@@ -323,6 +326,58 @@ describe('lib/bot-menu.js Helpers & Formatters', () => {
     assert.equal(normalizeCommandText('/clean'), 'clean');
     assert.equal(normalizeCommandText('🧹 ক্লিন ড্যাশবোর্ড'), 'clean');
     assert.equal(normalizeCommandText('something-else'), null);
+  });
+
+  test('deleteTelegramMessages handles empty or invalid input safely', async () => {
+    assert.equal(await deleteTelegramMessages(null, 123, [1, 2]), 0);
+    assert.equal(await deleteTelegramMessages('token', null, [1, 2]), 0);
+    assert.equal(await deleteTelegramMessages('token', 123, []), 0);
+    assert.equal(await deleteTelegramMessages('token', 123, [-5, 'bad']), 0);
+  });
+
+  test('deleteTelegramMessages executes bulk deleteMessages and fallback deleteMessage', async () => {
+    const fetchCalls = [];
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      fetchCalls.push({ url: String(url), opts });
+      return new Response(JSON.stringify({ ok: true, result: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    };
+
+    try {
+      const count = await deleteTelegramMessages('bot-token', 12345, [101, 102, 103]);
+      assert.equal(count, 3);
+      assert.ok(fetchCalls.some(c => c.url.includes('deleteMessages')));
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+
+  test('clearChatHistory collects tracked IDs and range sweep to delete messages', async () => {
+    const fetchCalls = [];
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      fetchCalls.push({ url: String(url), opts });
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    };
+
+    const mockRedis = {
+      lrange: async () => ['10', '20'],
+      del: async () => 1
+    };
+
+    try {
+      const deleted = await clearChatHistory(mockRedis, 'bot-token', 12345, 50);
+      assert.ok(deleted > 0);
+      assert.ok(fetchCalls.length > 0);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
   });
 });
 

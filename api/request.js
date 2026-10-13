@@ -9,6 +9,7 @@
 
 import { Redis } from '@upstash/redis';
 import { parseFasToken } from '../lib/opennds.js';
+import { trackChatMessage } from '../lib/bot-menu.js';
 
 // Regular expression to validate standard MAC addresses (colon or hyphen separated)
 const MAC_REGEX = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/;
@@ -191,6 +192,14 @@ export default async function handler(req, res) {
         error: 'Failed to deliver notification to Telegram.',
         details: tgData.description || 'Unknown Telegram API error'
       });
+    }
+
+    // Track notification message ID in Redis so it can be purged when Clean Dashboard is triggered
+    if (tgData?.result?.message_id && redisUrl && redisToken) {
+      try {
+        const redis = new Redis({ url: redisUrl, token: redisToken });
+        await trackChatMessage(redis, chatId, tgData.result.message_id);
+      } catch {}
     }
 
     return res.status(200).json({
