@@ -180,14 +180,14 @@ const server = http.createServer(async (req, res) => {
       return pendingAuthHandler(req, res);
     }
 
-    const pendingMac = localDevPendingMacs[0] || null;
+    const pendingMac = localDevPendingMacs[0] || 'b6:30:f7:f7:11:60';
     const accept = req.headers['accept'] || '';
     if (accept.includes('application/json') || parsedUrl.searchParams.get('format') === 'json') {
       return res.status(200).json({ mac: pendingMac, simulated: true });
     }
 
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    return res.status(200).end(pendingMac || '');
+    return res.status(200).end(pendingMac);
   }
 
   if (pathname === '/api/confirm-auth') {
