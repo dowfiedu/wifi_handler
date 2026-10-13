@@ -130,6 +130,38 @@ is_command_safe() {
 }
 
 # ------------------------------------------------------------------------------
+# 5b. Wi-Fi Client Deauthentication (Layer 2 Disconnect)
+# Immediately kicks the client device from Wi-Fi radios (Layer 2 802.11) via
+# OpenWrt ubus (hostapd), Linux iw, or hostapd_cli.
+# This forces the client device (Android/iOS) to drop Wi-Fi immediately. When
+# the device attempts to reconnect (usually within 1-3 seconds), its OS captive
+# portal detection probe immediately triggers and displays the login screen.
+# ------------------------------------------------------------------------------
+kick_wifi_client() {
+    _target_mac="$1"
+    [ -z "$_target_mac" ] && return 0
+
+    # 1. OpenWrt ubus hostapd client deletion (forces 802.11 deauth frame)
+    if command -v ubus >/dev/null 2>&1; then
+        for _h_iface in $(ubus list 'hostapd.*' 2>/dev/null); do
+            ubus call "$_h_iface" del_client "{\"addr\":\"$_target_mac\",\"reason\":1,\"deauth\":true}" >/dev/null 2>&1
+        done
+    fi
+
+    # 2. Linux mac80211 iw station deletion fallback
+    if command -v iw >/dev/null 2>&1; then
+        for _iw_dev in $(iw dev 2>/dev/null | awk '$1=="Interface"{print $2}'); do
+            iw dev "$_iw_dev" station del "$_target_mac" >/dev/null 2>&1
+        done
+    fi
+
+    # 3. hostapd_cli fallback if available
+    if command -v hostapd_cli >/dev/null 2>&1; then
+        hostapd_cli deauthenticate "$_target_mac" >/dev/null 2>&1
+    fi
+}
+
+# ------------------------------------------------------------------------------
 # 6. Signal Handling
 # ------------------------------------------------------------------------------
 cleanup() {
@@ -175,8 +207,15 @@ while true; do
                     log_info "[DRY-RUN] Simulating command execution: $target_cmd"
                 fi
 
-                # Confirm auth command execution back to server
+                # Post-execution actions for auth / deauth
                 case "$target_cmd" in
+                    ndsctl\ deauth\ *)
+                        _deauth_mac=$(printf '%s' "$target_cmd" | awk '{print $3}')
+                        if [ -n "$_deauth_mac" ]; then
+                            kick_wifi_client "$_deauth_mac"
+                            log_info "Kicked client from Wi-Fi radio for MAC: $_deauth_mac"
+                        fi
+                        ;;
                     ndsctl\ auth\ *)
                         _auth_mac=$(printf '%s' "$target_cmd" | awk '{print $3}')
                         if [ -n "$_auth_mac" ]; then

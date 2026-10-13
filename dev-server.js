@@ -305,10 +305,25 @@ const server = http.createServer(async (req, res) => {
     }
 
     // In local dev simulation mode:
+    const message = req.body?.message;
+    if (message && message.text) {
+      console.log(`\n--- 📱 [LOCAL DEV: SIMULATED TELEGRAM MESSAGE] ---`);
+      console.log(`Text: "${message.text}"`);
+      console.log(`-------------------------------------------------\n`);
+      return res.status(200).json({ ok: true, simulated: true, text: message.text });
+    }
+
     const callbackQuery = req.body?.callback_query;
     if (callbackQuery) {
       const parsed = parseCallbackData(callbackQuery.data);
       if (parsed) {
+        if (parsed.action === 'menu') {
+          console.log(`\n--- 📱 [LOCAL DEV: SIMULATED TELEGRAM MENU CALLBACK] ---`);
+          console.log(`Command: ${parsed.command}`);
+          console.log(`------------------------------------------------------\n`);
+          return res.status(200).json({ ok: true, simulated: true, menuCommand: parsed.command });
+        }
+
         const { action, mac, duration } = parsed;
         const cmd = action === 'auth' ? `ndsctl auth ${mac} ${duration}` : `ndsctl deauth ${mac}`;
         localDevQueue.push(cmd);
@@ -384,6 +399,16 @@ const server = http.createServer(async (req, res) => {
 
       if (action === 'login') {
         return res.status(200).json({ ok: true, simulated: true, message: 'Logged in successfully (Dev Mode).' });
+      }
+
+      if (action === 'clean') {
+        const initialCount = localDevRequests.length;
+        const filtered = localDevRequests.filter(r => r.status !== 'rejected' && r.status !== 'terminated');
+        const removedCount = initialCount - filtered.length;
+        localDevRequests.length = 0;
+        localDevRequests.push(...filtered);
+        console.log(`\n--- 🧹 [LOCAL DEV: ADMIN CLEAN] Removed ${removedCount} terminated records ---\n`);
+        return res.status(200).json({ ok: true, simulated: true, removedCount, remainingCount: filtered.length });
       }
 
       if (action !== 'auth' && action !== 'deauth') {

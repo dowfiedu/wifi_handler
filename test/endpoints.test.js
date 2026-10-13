@@ -265,6 +265,203 @@ describe('API Endpoints Validation & Status Codes', () => {
     }
   });
 
+  test('/api/webhook processes /start and /menu text messages by presenting keyboard menu', async () => {
+    process.env.TELEGRAM_BOT_TOKEN = 'test-token';
+    process.env.UPSTASH_REDIS_REST_URL = 'https://mock.upstash.io';
+    process.env.UPSTASH_REDIS_REST_TOKEN = 'mock-token';
+
+    const fetchCalls = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, options) => {
+      fetchCalls.push({ url: String(url), options });
+      return new Response(JSON.stringify({ ok: true, result: 1 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    };
+
+    try {
+      const req = {
+        method: 'POST',
+        body: {
+          update_id: 8888,
+          message: {
+            text: '/start',
+            chat: { id: 12345 }
+          }
+        }
+      };
+      const res = createMockRes();
+      await webhookHandler(req, res);
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.ok, true);
+      assert.equal(res.body.action, 'menu_shown');
+
+      // Verify sendMessage was invoked with welcome text and persistent reply keyboard
+      const sendCall = fetchCalls.find(c => c.url.includes('sendMessage'));
+      assert.ok(sendCall, 'sendMessage was called');
+      const body = JSON.parse(sendCall.options.body);
+      assert.equal(body.chat_id, 12345);
+      assert.match(body.text, /OpenWrt Wi-Fi অ্যাডমিন কন্ট্রোল সেন্টারে/);
+      assert.ok(body.reply_markup.keyboard, 'Reply keyboard attached');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('/api/webhook processes /dashboard, /active, /previous, /details, /clean text commands', async () => {
+    process.env.TELEGRAM_BOT_TOKEN = 'test-token';
+    process.env.UPSTASH_REDIS_REST_URL = 'https://mock.upstash.io';
+    process.env.UPSTASH_REDIS_REST_TOKEN = 'mock-token';
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      if (String(url).includes('upstash.io')) {
+        return new Response(JSON.stringify({ result: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      return new Response(JSON.stringify({ ok: true, result: 1 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    };
+
+    try {
+      const commands = ['/dashboard', '/active', '/previous', '/details', '/clean'];
+      for (const cmd of commands) {
+        const req = {
+          method: 'POST',
+          body: {
+            update_id: 9999,
+            message: {
+              text: cmd,
+              chat: { id: 12345 }
+            }
+          }
+        };
+        const res = createMockRes();
+        await webhookHandler(req, res);
+        assert.equal(res.statusCode, 200);
+        assert.equal(res.body.ok, true);
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('/api/webhook processes menu callback query triggers', async () => {
+    process.env.TELEGRAM_BOT_TOKEN = 'test-token';
+    process.env.UPSTASH_REDIS_REST_URL = 'https://mock.upstash.io';
+    process.env.UPSTASH_REDIS_REST_TOKEN = 'mock-token';
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      if (String(url).includes('upstash.io')) {
+        return new Response(JSON.stringify({ result: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      return new Response(JSON.stringify({ ok: true, result: 1 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    };
+
+    try {
+      const req = {
+        method: 'POST',
+        body: {
+          callback_query: {
+            id: 'cb_menu_1',
+            data: 'menu_dashboard',
+            message: {
+              chat: { id: 12345 },
+              message_id: 100
+            }
+          }
+        }
+      };
+      const res = createMockRes();
+      await webhookHandler(req, res);
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.ok, true);
+      assert.equal(res.body.action, 'menu');
+      assert.equal(res.body.command, 'dashboard');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('/api/webhook blocks unauthorized chat when TELEGRAM_CHAT_ID is set', async () => {
+    process.env.TELEGRAM_BOT_TOKEN = 'test-token';
+    process.env.TELEGRAM_CHAT_ID = '99999';
+    process.env.UPSTASH_REDIS_REST_URL = 'https://mock.upstash.io';
+    process.env.UPSTASH_REDIS_REST_TOKEN = 'mock-token';
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({ ok: true, result: 1 }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    });
+
+    try {
+      const req = {
+        method: 'POST',
+        body: {
+          update_id: 1111,
+          message: {
+            text: '/dashboard',
+            chat: { id: 88888 }
+          }
+        }
+      };
+      const res = createMockRes();
+      await webhookHandler(req, res);
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.ok, false);
+      assert.equal(res.body.error, 'Unauthorized chat.');
+    } finally {
+      delete process.env.TELEGRAM_CHAT_ID;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('/api/admin POST executes clean action successfully', async () => {
+    process.env.ADMIN_PASSWORD = 'admin-secret-pass';
+    process.env.UPSTASH_REDIS_REST_URL = 'https://mock.upstash.io';
+    process.env.UPSTASH_REDIS_REST_TOKEN = 'mock-token';
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => {
+      return new Response(JSON.stringify({ result: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    };
+
+    try {
+      const req = {
+        method: 'POST',
+        headers: { authorization: 'Bearer admin-secret-pass' },
+        body: { action: 'clean' }
+      };
+      const res = createMockRes();
+      await adminHandler(req, res);
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.ok, true);
+      assert.equal(res.body.success, true);
+      assert.match(res.body.message, /cleaned/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test('/api/admin rejects unsupported HTTP method with 405', async () => {
     const req = { method: 'DELETE', headers: {} };
     const res = createMockRes();

@@ -12,6 +12,7 @@
 import { Redis } from '@upstash/redis';
 import { normalizeMac, escapeMarkdown } from './request.js';
 import { timingSafeCompare } from './poll.js';
+import { cleanTerminatedRecords } from '../lib/bot-menu.js';
 
 // Regular expression to validate standard MAC addresses (colon or hyphen separated)
 export const MAC_REGEX = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/;
@@ -182,10 +183,31 @@ export default async function handler(req, res) {
     return res.status(200).json({ ok: true, message: 'Admin login verified successfully.' });
   }
 
+  // Action: Clean terminated and rejected records from Redis
+  if (action === 'clean') {
+    if (!redisUrl || !redisToken) {
+      return res.status(500).json({ error: 'Server configuration error: Redis credentials missing.' });
+    }
+    try {
+      const redis = new Redis({ url: redisUrl, token: redisToken });
+      const cleanResult = await cleanTerminatedRecords(redis);
+      return res.status(200).json({
+        ok: true,
+        success: true,
+        message: `Successfully cleaned ${cleanResult.removedCount} terminated records from database.`,
+        removedCount: cleanResult.removedCount,
+        remainingCount: cleanResult.remainingCount
+      });
+    } catch (cleanErr) {
+      console.error('[Admin Clean Error]', cleanErr);
+      return res.status(500).json({ error: 'Failed to clean database records.' });
+    }
+  }
+
   // Action must be either 'auth' or 'deauth'
   if (action !== 'auth' && action !== 'deauth') {
     return res.status(400).json({
-      error: 'Invalid action. Supported actions are "auth" and "deauth" (or "login").'
+      error: 'Invalid action. Supported actions are "auth", "deauth", and "clean" (or "login").'
     });
   }
 

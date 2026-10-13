@@ -87,4 +87,10 @@ if is_command_safe "ndsctl auth invalid-mac 60"; then
     exit 1
 fi
 
+echo "Testing kick_wifi_client safely handles calls..."
+eval "$(sed -n '/^kick_wifi_client() {/,/^}/p' router/sync.sh)"
+# Calling with empty MAC or non-existent ubus/iw should not crash or return non-zero
+kick_wifi_client ""
+kick_wifi_client "00:11:22:33:44:55"
+
 echo "All router/sync.sh shell tests passed successfully!"

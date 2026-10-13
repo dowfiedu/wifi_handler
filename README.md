@@ -183,6 +183,21 @@ curl "https://api.telegram.org/bot<YOUR_TELEGRAM_BOT_TOKEN>/getWebhookInfo"
 
 ---
 
+### 🤖 Telegram Bot Control Center & Interactive Menu
+
+The Telegram Bot includes a full-featured admin menu and persistent reply keyboard:
+
+| Button / Command | Function | Description |
+| :--- | :--- | :--- |
+| `📊 ড্যাশবোর্ড` (`/dashboard`) | **Live Dashboard** | Displays live network state and active connected users only. Terminated devices are strictly hidden. |
+| `🟢 অ্যাক্টিভ ইউজার` (`/active`) | **Active Users** | Shows total count and list of active devices with name, MAC, IP, granted duration, and connect time. |
+| `👥 প্রিভিয়াস ইউজার` (`/previous`) | **Previous Users** | Chronological log of past sessions, expired users, and disconnected devices. |
+| `📋 ইউজার ডিটেইলস` (`/details`) | **All User Cards** | Structured profile cards for every user (নাম, তারিখ, ম্যাক অ্যাড্রেস, আইপি অ্যাড্রেস, টাইমস্ট্যাম্প). |
+| `🧹 ক্লিন ড্যাশবোর্ড` (`/clean`) | **Clean Dashboard** | Purges all terminated and rejected records from Redis and refreshes the live active view. |
+| `⚙️ মেনু` (`/menu` or `/start`) | **Main Menu** | Initializes the bottom persistent keyboard and registers native client commands with BotFather API. |
+
+---
+
 ## 📡 OpenWrt Router Configuration
 
 ### 1. Configure openNDS FAS (Forwarding Authentication Service)
@@ -251,6 +266,23 @@ Check router system logs:
 ```sh
 logread -e opennds-sync
 ```
+
+---
+
+### 4. Instant Wi-Fi Deauthentication & Session Expiry Hook (Optional but Recommended)
+
+By default, openNDS revokes firewall permissions (`Layer 3`) when terminated or when session time expires, but client devices keep Wi-Fi (`Layer 2`) connected. Modern smartphones (Android/iOS) wait 1–2 minutes before running background connectivity checks.
+
+To make devices disconnect and show the login prompt within **5–10 seconds**:
+1. `router/sync.sh` already executes an immediate Wi-Fi radio kick (`ubus call hostapd.* del_client` / `iw dev station del`) whenever `ndsctl deauth` is received.
+2. For **natural session expiration** (e.g. when 30m or 60m runs out), enable the `binauth` hook in openNDS:
+   Copy `router/binauth.sh` to `/etc/opennds/binauth.sh` on the router:
+   ```sh
+   chmod +x /etc/opennds/binauth.sh
+   uci set opennds.@openNDS[0].binauth='/etc/opennds/binauth.sh'
+   uci commit opennds
+   /etc/init.d/opennds restart
+   ```
 
 ---
 

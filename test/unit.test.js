@@ -7,6 +7,19 @@ import { parseCallbackData as parseCallbackDataTelegram } from '../api/telegram.
 import { timingSafeCompare } from '../api/poll.js';
 import { checkAdminAuth } from '../api/admin.js';
 import { parseFasToken } from '../lib/opennds.js';
+import {
+  formatDateTime,
+  isUserActive,
+  isUserTerminated,
+  formatUserDetailsCard,
+  formatUserDetailsList,
+  formatActiveUsersList,
+  formatPreviousUsersList,
+  formatDashboardMessage,
+  TELEGRAM_MENU_KEYBOARD,
+  TELEGRAM_INLINE_MENU
+} from '../lib/bot-menu.js';
+import { normalizeCommandText } from '../api/webhook.js';
 
 describe('api/request.js Helpers', () => {
   test('escapeMarkdown escapes Markdown special characters', () => {
@@ -97,6 +110,16 @@ describe('api/webhook.js Callback Parsing', () => {
     assert.equal(parseCallbackData('deauth_invalid-mac'), null);
   });
 
+  test('parses menu callback triggers correctly', () => {
+    assert.deepEqual(parseCallbackData('menu_dashboard'), { action: 'menu', command: 'dashboard' });
+    assert.deepEqual(parseCallbackData('menu_active'), { action: 'menu', command: 'active' });
+    assert.deepEqual(parseCallbackData('menu_previous'), { action: 'menu', command: 'previous' });
+    assert.deepEqual(parseCallbackData('menu_history'), { action: 'menu', command: 'previous' });
+    assert.deepEqual(parseCallbackData('menu_details'), { action: 'menu', command: 'details' });
+    assert.deepEqual(parseCallbackData('menu_users'), { action: 'menu', command: 'details' });
+    assert.deepEqual(parseCallbackData('menu_clean'), { action: 'menu', command: 'clean' });
+  });
+
   test('api/telegram.js correctly aliases parseCallbackData', () => {
     assert.equal(parseCallbackDataTelegram, parseCallbackData);
   });
@@ -178,4 +201,129 @@ describe('lib/opennds.js FAS Token Parsing', () => {
     assert.deepEqual(parseFasToken('not_valid_base64_data_!!!'), { clientMac: null, clientIp: null, gatewayAddress: null });
   });
 });
+
+describe('lib/bot-menu.js Helpers & Formatters', () => {
+  test('formatDateTime formats valid date and handles missing/invalid gracefully', () => {
+    const fixed = '2026-10-13T12:30:00.000Z';
+    const result = formatDateTime(fixed);
+    assert.equal(result.date, '13 Oct 2026');
+    assert.match(result.time, /12:30:00/);
+
+    const empty = formatDateTime(null);
+    assert.equal(empty.date, 'N/A');
+    assert.equal(empty.time, 'N/A');
+
+    const invalid = formatDateTime('invalid-date-string');
+    assert.equal(invalid.date, 'N/A');
+    assert.equal(invalid.time, 'N/A');
+  });
+
+  test('isUserActive identifies active, unlimited, and expired users', () => {
+    // Unlimited active
+    assert.equal(isUserActive({ status: 'authorized', duration: 0 }), true);
+    assert.equal(isUserActive({ status: 'AUTHENTICATED', duration: 0 }), true);
+
+    // Active within duration (5 mins ago, 60m duration)
+    const recentIso = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    assert.equal(isUserActive({ status: 'authorized', duration: 60, reviewedAt: recentIso }), true);
+
+    // Expired (120 mins ago, 60m duration)
+    const expiredIso = new Date(Date.now() - 120 * 60 * 1000).toISOString();
+    assert.equal(isUserActive({ status: 'authorized', duration: 60, reviewedAt: expiredIso }), false);
+
+    // Terminated or pending
+    assert.equal(isUserActive({ status: 'terminated' }), false);
+    assert.equal(isUserActive({ status: 'pending' }), false);
+  });
+
+  test('isUserTerminated detects terminated and rejected statuses', () => {
+    assert.equal(isUserTerminated({ status: 'terminated' }), true);
+    assert.equal(isUserTerminated({ status: 'rejected' }), true);
+    assert.equal(isUserTerminated({ status: 'authorized' }), false);
+    assert.equal(isUserTerminated({ status: 'pending' }), false);
+  });
+
+  test('formatUserDetailsCard outputs specific layout requested by user', () => {
+    const user = {
+      name: 'সাকিব আল হাসান',
+      mac: '4a:8b:9c:1d:2e:3f',
+      ip: '192.168.1.105',
+      requestedAt: '2026-10-13T10:00:00.000Z'
+    };
+
+    const card = formatUserDetailsCard(user);
+
+    // User specification:
+    // 1. নাম (Name)
+    // 2. ডেট (Date)
+    // 3. ম্যাক অ্যাড্রেস (MAC address)
+    // 4. আইপি অ্যাড্রেস (IP address)
+    // 5. টাইমস্ট্যাম্প (Timestamp)
+    assert.match(card, /👤 \*নাম:\* সাকিব আল হাসান/);
+    assert.match(card, /📅 \*তারিখ:\* 13 Oct 2026/);
+    assert.match(card, /🏷 \*ম্যাক অ্যাড্রেস:\* `4a:8b:9c:1d:2e:3f`/);
+    assert.match(card, /🌐 \*আইপি অ্যাড্রেস:\* `192\.168\.1\.105`/);
+    assert.match(card, /⏰ \*টাইমস্ট্যাম্প:\*/);
+  });
+
+  test('formatDashboardMessage strictly omits terminated users and displays active only', () => {
+    const activeUsers = [
+      { name: 'রহিম', mac: 'aa:bb:cc:dd:ee:ff', duration: 60 },
+      { name: 'করিম', mac: '11:22:33:44:55:66', duration: 0 }
+    ];
+
+    const dashboard = formatDashboardMessage(activeUsers, 2);
+
+    assert.match(dashboard, /ওয়াইফাই নেটওয়ার্ক ড্যাশবোর্ড/);
+    assert.match(dashboard, /কারেন্টলি অ্যাক্টিভ ইউজার:\* 2 জন/);
+    assert.match(dashboard, /পেন্ডিং রাউটার কিউ:\* 2 টি/);
+    assert.match(dashboard, /রহিম/);
+    assert.match(dashboard, /করিম/);
+  });
+
+  test('formatActiveUsersList formats count and details for active users', () => {
+    const activeUsers = [
+      { name: 'তানভীর', mac: 'bb:cc:dd:ee:ff:00', duration: 30, ip: '192.168.1.55' }
+    ];
+    const list = formatActiveUsersList(activeUsers);
+    assert.match(list, /মোট কানেক্টেড ইউজার:\* 1 জন/);
+    assert.match(list, /তানভীর/);
+    assert.match(list, /30m/);
+
+    const emptyList = formatActiveUsersList([]);
+    assert.match(emptyList, /বর্তমানে কোনো ইউজার অ্যাক্টিভ বা কানেক্টেড নেই/);
+  });
+
+  test('formatPreviousUsersList formats previous session list', () => {
+    const previous = [
+      { name: 'আলিফ', mac: 'cc:dd:ee:ff:00:11', status: 'terminated' }
+    ];
+    const list = formatPreviousUsersList(previous);
+    assert.match(list, /মোট পূর্ববর্তী ইউজার:\* 1 জন/);
+    assert.match(list, /আলিফ/);
+    assert.match(list, /Terminated/);
+
+    const empty = formatPreviousUsersList([]);
+    assert.match(empty, /কোনো পূর্ববর্তী ইউজারের হিস্ট্রি পাওয়া যায়নি/);
+  });
+
+  test('normalizeCommandText maps English and Bengali command strings', () => {
+    assert.equal(normalizeCommandText('/start'), 'menu');
+    assert.equal(normalizeCommandText('menu'), 'menu');
+    assert.equal(normalizeCommandText('মেনু'), 'menu');
+    assert.equal(normalizeCommandText('/dashboard'), 'dashboard');
+    assert.equal(normalizeCommandText('📊 ড্যাশবোর্ড'), 'dashboard');
+    assert.equal(normalizeCommandText('/active'), 'active');
+    assert.equal(normalizeCommandText('🟢 অ্যাক্টিভ ইউজার'), 'active');
+    assert.equal(normalizeCommandText('/previous'), 'previous');
+    assert.equal(normalizeCommandText('👥 প্রিভিয়াস ইউজার'), 'previous');
+    assert.equal(normalizeCommandText('/history'), 'previous');
+    assert.equal(normalizeCommandText('/details'), 'details');
+    assert.equal(normalizeCommandText('📋 ইউজার ডিটেইলস'), 'details');
+    assert.equal(normalizeCommandText('/clean'), 'clean');
+    assert.equal(normalizeCommandText('🧹 ক্লিন ড্যাশবোর্ড'), 'clean');
+    assert.equal(normalizeCommandText('something-else'), null);
+  });
+});
+
 
