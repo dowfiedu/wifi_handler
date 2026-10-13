@@ -24,6 +24,7 @@ import {
   formatActiveUsersList,
   formatPreviousUsersList,
   formatDashboardMessage,
+  buildActiveUsersKeyboard,
   TELEGRAM_MENU_KEYBOARD,
   TELEGRAM_INLINE_MENU,
   fetchUserRecords,
@@ -185,9 +186,33 @@ export async function updateTelegramMessage(botToken, message, statusText, inlin
 }
 
 /**
- * Dispatches menu actions (Dashboard, Active Users, Previous Users, User Details, Clean Dashboard).
+ * Directly edits the message text and inline keyboard in-place.
+ */
+export async function editTelegramMessageText(botToken, chatId, messageId, text, inlineKeyboard = []) {
+  if (!botToken || !chatId || !messageId) return;
+  try {
+    const url = `https://api.telegram.org/bot${botToken}/editMessageText`;
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        message_id: messageId,
+        text,
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: inlineKeyboard }
+      })
+    });
+  } catch (err) {
+    console.error('[editTelegramMessageText Failed]', err);
+  }
+}
+
+/**
+ * Dispatches menu actions (Active Users, Previous Users, User Details, Clean Dashboard/Chat).
+ * Redundant dashboard is merged directly into the active users view.
  *
- * @param {string} command - 'dashboard' | 'active' | 'previous' | 'details' | 'clean'
+ * @param {string} command - 'active' | 'previous' | 'details' | 'clean' | 'dashboard'
  * @param {object} redis - Redis instance
  * @param {string} [botToken] - Telegram Bot Token
  * @param {string|number} [chatId] - Telegram Chat ID
@@ -195,27 +220,19 @@ export async function updateTelegramMessage(botToken, message, statusText, inlin
  * @returns {Promise<{ text: string, replyMarkup: object, ackText?: string }>}
  */
 export async function processMenuCommand(command, redis, botToken = null, chatId = null, currentMsgId = null) {
-  if (command === 'dashboard') {
+  // Active users view (and dashboard redirection)
+  if (command === 'active' || command === 'dashboard') {
     const [users, pendingQueueCount] = await Promise.all([
       fetchUserRecords(redis),
       redis.llen('pending_commands').catch(() => 0)
     ]);
     const activeUsers = users.filter(u => isUserActive(u));
-    const text = formatDashboardMessage(activeUsers, Number(pendingQueueCount) || 0);
-    return {
-      text,
-      replyMarkup: TELEGRAM_INLINE_MENU,
-      ackText: '📊 ড্যাশবোর্ড আপডেট করা হয়েছে'
-    };
-  }
+    const text = formatActiveUsersList(activeUsers, Number(pendingQueueCount) || 0);
+    const activeKeyboard = buildActiveUsersKeyboard(activeUsers);
 
-  if (command === 'active') {
-    const users = await fetchUserRecords(redis);
-    const activeUsers = users.filter(u => isUserActive(u));
-    const text = formatActiveUsersList(activeUsers);
     return {
       text,
-      replyMarkup: TELEGRAM_INLINE_MENU,
+      replyMarkup: activeKeyboard || TELEGRAM_INLINE_MENU,
       ackText: `🟢 অ্যাক্টিভ ইউজার: ${activeUsers.length} জন`
     };
   }
@@ -234,9 +251,12 @@ export async function processMenuCommand(command, redis, botToken = null, chatId
   if (command === 'details') {
     const users = await fetchUserRecords(redis);
     const text = formatUserDetailsList(users);
+    const activeUsers = users.filter(u => isUserActive(u));
+    const activeKeyboard = buildActiveUsersKeyboard(activeUsers);
+
     return {
       text,
-      replyMarkup: TELEGRAM_INLINE_MENU,
+      replyMarkup: activeKeyboard || TELEGRAM_INLINE_MENU,
       ackText: `📋 ইউজার রেকর্ড: ${users.length} জন`
     };
   }
@@ -254,19 +274,23 @@ export async function processMenuCommand(command, redis, botToken = null, chatId
       redis.llen('pending_commands').catch(() => 0)
     ]);
     const activeUsers = users.filter(u => isUserActive(u));
-    const dashboardText = formatDashboardMessage(activeUsers, Number(pendingQueueCount) || 0);
 
     const cleanNotice = [
-      '🧹 *ড্যাশবোর্ড ও চ্যাট সফলভাবে ক্লিন করা হয়েছে!*',
+      '🧹 *ক্লিন অপারেশন সফলভাবে সম্পন্ন!*',
       '━━━━━━━━━━━━━━━━━━━━',
-      `✅ পূর্ববর্তী সকল বার্তা মুছে দেওয়া হয়েছে এবং *${cleanResult.removedCount}* টি টার্মিনেটেড রেকর্ড ডাটাবেজ থেকে অপসারণ করা হয়েছে।`,
-      'বর্তমানে ড্যাশবোর্ডে শুধুমাত্র সক্রিয় ব্যবহারকারীদের তথ্য রয়েছে।\n'
+      '🗑 *চ্যাট হিস্ট্রি:* পূর্ববর্তী সকল বার্তা মুছে দেওয়া হয়েছে।',
+      `🗄 *ডাটাবেজ:* ${cleanResult.removedCount} টি টার্মিনেটেড রেকর্ড অপসারণ করা হয়েছে।`,
+      `🟢 *বর্তমান সক্রিয় ইউজার:* ${activeUsers.length} জন`,
+      `⏳ *পেন্ডিং রাউটার কিউ:* ${Number(pendingQueueCount) || 0} টি`,
+      '━━━━━━━━━━━━━━━━━━━━',
+      '✨ আপনার কন্ট্রোল প্যানেল এখন সম্পূর্ণ পরিচ্ছন্ন ও প্রস্তুত।',
+      '_নিচের মেনুবার থেকে যেকোনো অপশন বেছে নিন।_'
     ].join('\n');
 
     return {
-      text: `${cleanNotice}\n${dashboardText}`,
-      replyMarkup: TELEGRAM_INLINE_MENU,
-      ackText: `🧹 ক্লিন সম্পন্ন! চ্যাট ও ডাটা ফ্রেশ করা হয়েছে`
+      text: cleanNotice,
+      replyMarkup: TELEGRAM_MENU_KEYBOARD,
+      ackText: '🧹 ক্লিন সম্পন্ন! চ্যাট ও ডাটা ফ্রেশ করা হয়েছে'
     };
   }
 
@@ -292,24 +316,22 @@ export function normalizeCommandText(text) {
   if (['start', 'menu', 'help', 'মেনু', 'সাহায্য'].includes(normalized)) {
     return 'menu';
   }
-  // Check clean before dashboard so '🧹 ক্লিন ড্যাশবোর্ড' doesn't get matched by generic 'ড্যাশবোর্ড'
-  if (['clean', 'ক্লিন', '🧹 ক্লিন ড্যাশবোর্ড'].includes(normalized) || raw.includes('ক্লিন')) {
+  // Check clean before other keywords
+  if (['clean', 'ক্লিন', '🧹 ক্লিন চ্যাট ও ডাটা', '🧹 ক্লিন ড্যাশবোর্ড'].includes(normalized) || raw.includes('ক্লিন')) {
     return 'clean';
   }
+  // Gracefully redirect legacy dashboard to active view
   if (['dashboard', 'ড্যাশবোর্ড', '📊 ড্যাশবোর্ড'].includes(normalized) || raw.includes('ড্যাশবোর্ড')) {
-    return 'dashboard';
+    return 'active';
   }
   if (['active', 'অ্যাক্টিভ', '🟢 অ্যাক্টিভ ইউজার'].includes(normalized) || raw.includes('অ্যাক্টিভ')) {
     return 'active';
   }
-  if (['previous', 'history', 'হিস্ট্রি', 'প্রিভিয়াস', '👥 প্রিভিয়াস ইউজার'].includes(normalized) || raw.includes('প্রিভিয়াস') || raw.includes('হিস্ট্রি')) {
+  if (['previous', 'history', 'হিস্ট্রি', 'প্রিভিয়াস', 'পূর্ববর্তী', '👥 পূর্ববর্তী ইউজার', '👥 প্রিভিয়াস ইউজার'].includes(normalized) || raw.includes('প্রিভিয়াস') || raw.includes('পূর্ববর্তী') || raw.includes('হিস্ট্রি')) {
     return 'previous';
   }
-  if (['details', 'users', 'ডিটেইলস', '📋 ইউজার ডিটেইলস'].includes(normalized) || raw.includes('ডিটেইলস') || raw.includes('বিস্তারিত')) {
+  if (['details', 'users', 'ডিটেইলস', 'বিস্তারিত', '📋 ইউজার ডিটেইলস'].includes(normalized) || raw.includes('ডিটেইলস') || raw.includes('বিস্তারিত')) {
     return 'details';
-  }
-  if (['clean', 'ক্লিন', '🧹 ক্লিন ড্যাশবোর্ড'].includes(normalized) || raw.includes('ক্লিন')) {
-    return 'clean';
   }
 
   return null;
@@ -384,16 +406,15 @@ export default async function handler(req, res) {
       const welcomeText = [
         '👋 *স্বাগতম OpenWrt Wi-Fi অ্যাডমিন কন্ট্রোল সেন্টারে!*',
         '━━━━━━━━━━━━━━━━━━━━',
-        'এই বটের মাধ্যমে আপনি সরাসরি ওয়াইফাই নেটওয়ার্কের লাইভ ইউজার মনিটর ও কন্ট্রোল করতে পারবেন।',
+        'এই বটের মাধ্যমে আপনি সরাসরি ওয়াইফাই নেটওয়ার্কের লাইভ ইউজার মনিটর ও সংযোগ নিয়ন্ত্রণ করতে পারবেন।',
         '',
         '🔘 *প্রধান কন্ট্রোল অপশনসমূহ:*',
-        '• 📊 *ড্যাশবোর্ড:* লাইভ নেটওয়ার্ক ও শুধু অ্যাক্টিভ ইউজারদের স্ট্যাটাস',
-        '• 🟢 *অ্যাক্টিভ ইউজার:* বর্তমানে সংযুক্ত ও সক্রিয় ডিভাইস তালিকা',
-        '• 👥 *প্রিভিয়াস ইউজার:* পূর্ববর্তী বা মেয়াদোত্তীর্ণ ইউজারদের তালিকা',
+        '• 🟢 *অ্যাক্টিভ ইউজার:* সংযুক্ত সক্রিয় ডিভাইস ও সরাসরি টার্মিনেশন বাটন',
+        '• 👥 *পূর্ববর্তী ইউজার:* পূর্ববর্তী বা মেয়াদোত্তীর্ণ ইউজারদের তালিকা',
         '• 📋 *ইউজার ডিটেইলস:* প্রতিটি ইউজারের পূর্ণ বিবরণ (নাম, তারিখ, MAC, IP ও টাইমস্ট্যাম্প)',
-        '• 🧹 *ক্লিন ড্যাশবোর্ড:* টার্মিনেট করা সকল ডিভাইস ও পূর্ববর্তী চ্যাট বার্তা অপসারণ',
+        '• 🧹 *ক্লিন চ্যাট ও ডাটা:* টার্মিনেট করা সকল ডিভাইস ও পূর্ববর্তী চ্যাট বার্তা অপসারণ',
         '',
-        '_নিচের কিবোর্ড বাটন বা কমান্ড সিলেক্ট করে কাজ শুরু করুন।_'
+        '_নিচের স্থায়ী মেনুবার থেকে যেকোনো অপশন বেছে নিন।_'
       ].join('\n');
 
       await sendTelegramMessage(botToken, chatId, welcomeText, TELEGRAM_MENU_KEYBOARD, redis);
@@ -512,8 +533,25 @@ export default async function handler(req, res) {
     // 3. Clear Telegram client spinner
     await answerCallbackQuery(botToken, callbackQueryId, ackMessage, false);
 
-    // 4. Update the original notification message
-    await updateTelegramMessage(botToken, cbMessage, statusNotice, inlineKeyboard);
+    // 4. Update the original notification message or refresh active users list in-place
+    if (action === 'deauth' && cbMessage?.text && (cbMessage.text.includes('সক্রিয়') || cbMessage.text.includes('Active'))) {
+      const [updatedUsers, pendingQueue] = await Promise.all([
+        fetchUserRecords(redis),
+        redis.llen('pending_commands').catch(() => 0)
+      ]);
+      const updatedActive = updatedUsers.filter(u => isUserActive(u));
+      const updatedText = formatActiveUsersList(updatedActive, Number(pendingQueue) || 0);
+      const updatedKeyboard = buildActiveUsersKeyboard(updatedActive);
+      await editTelegramMessageText(
+        botToken,
+        cbChatId,
+        cbMessage.message_id,
+        updatedText,
+        updatedKeyboard ? updatedKeyboard.inline_keyboard : []
+      );
+    } else {
+      await updateTelegramMessage(botToken, cbMessage, statusNotice, inlineKeyboard);
+    }
 
     return res.status(200).json({
       ok: true,

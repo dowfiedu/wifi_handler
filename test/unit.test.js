@@ -16,6 +16,7 @@ import {
   formatActiveUsersList,
   formatPreviousUsersList,
   formatDashboardMessage,
+  buildActiveUsersKeyboard,
   TELEGRAM_MENU_KEYBOARD,
   TELEGRAM_INLINE_MENU,
   trackChatMessage,
@@ -277,11 +278,41 @@ describe('lib/bot-menu.js Helpers & Formatters', () => {
 
     const dashboard = formatDashboardMessage(activeUsers, 2);
 
-    assert.match(dashboard, /ওয়াইফাই নেটওয়ার্ক ড্যাশবোর্ড/);
-    assert.match(dashboard, /কারেন্টলি অ্যাক্টিভ ইউজার:\* 2 জন/);
-    assert.match(dashboard, /পেন্ডিং রাউটার কিউ:\* 2 টি/);
+    assert.match(dashboard, /সক্রিয় নেটওয়ার্ক ইউজার/);
+    assert.match(dashboard, /মোট কানেক্টেড ইউজার:\* 2 জন/);
+    assert.match(dashboard, /পেন্ডিং কিউ:\* 2 টি/);
     assert.match(dashboard, /রহিম/);
     assert.match(dashboard, /করিম/);
+  });
+
+  test('buildActiveUsersKeyboard generates inline disconnect buttons for each active user', () => {
+    const activeUsers = [
+      { name: 'Sabbir', mac: 'aa:bb:cc:dd:ee:01' },
+      { name: 'LongNamePersonExtremelyLong', mac: 'aa:bb:cc:dd:ee:02' }
+    ];
+
+    const markup = buildActiveUsersKeyboard(activeUsers);
+    assert.ok(markup && markup.inline_keyboard);
+    assert.equal(markup.inline_keyboard.length, 2);
+    assert.match(markup.inline_keyboard[0][0].text, /❌ সংযোগ বিচ্ছিন্ন: Sabbir/);
+    assert.equal(markup.inline_keyboard[0][0].callback_data, 'deauth_aa:bb:cc:dd:ee:01');
+    assert.equal(markup.inline_keyboard[1][0].callback_data, 'deauth_aa:bb:cc:dd:ee:02');
+
+    assert.equal(buildActiveUsersKeyboard([]), null);
+    assert.equal(buildActiveUsersKeyboard(null), null);
+  });
+
+  test('TELEGRAM_MENU_KEYBOARD is modern 2x2 grid with is_persistent enabled', () => {
+    assert.equal(TELEGRAM_MENU_KEYBOARD.is_persistent, true);
+    assert.equal(TELEGRAM_MENU_KEYBOARD.resize_keyboard, true);
+    assert.equal(TELEGRAM_MENU_KEYBOARD.keyboard.length, 2);
+    assert.equal(TELEGRAM_MENU_KEYBOARD.keyboard[0].length, 2);
+    assert.equal(TELEGRAM_MENU_KEYBOARD.keyboard[1].length, 2);
+    // Verifies redundant dashboard button is omitted
+    const allButtons = TELEGRAM_MENU_KEYBOARD.keyboard.flat().map(b => b.text);
+    assert.ok(!allButtons.some(b => b.includes('ড্যাশবোর্ড')));
+    assert.ok(allButtons.includes('🟢 অ্যাক্টিভ ইউজার'));
+    assert.ok(allButtons.includes('🧹 ক্লিন চ্যাট ও ডাটা'));
   });
 
   test('formatActiveUsersList formats count and details for active users', () => {
@@ -314,16 +345,18 @@ describe('lib/bot-menu.js Helpers & Formatters', () => {
     assert.equal(normalizeCommandText('/start'), 'menu');
     assert.equal(normalizeCommandText('menu'), 'menu');
     assert.equal(normalizeCommandText('মেনু'), 'menu');
-    assert.equal(normalizeCommandText('/dashboard'), 'dashboard');
-    assert.equal(normalizeCommandText('📊 ড্যাশবোর্ড'), 'dashboard');
+    assert.equal(normalizeCommandText('/dashboard'), 'active');
+    assert.equal(normalizeCommandText('📊 ড্যাশবোর্ড'), 'active');
     assert.equal(normalizeCommandText('/active'), 'active');
     assert.equal(normalizeCommandText('🟢 অ্যাক্টিভ ইউজার'), 'active');
     assert.equal(normalizeCommandText('/previous'), 'previous');
     assert.equal(normalizeCommandText('👥 প্রিভিয়াস ইউজার'), 'previous');
+    assert.equal(normalizeCommandText('👥 পূর্ববর্তী ইউজার'), 'previous');
     assert.equal(normalizeCommandText('/history'), 'previous');
     assert.equal(normalizeCommandText('/details'), 'details');
     assert.equal(normalizeCommandText('📋 ইউজার ডিটেইলস'), 'details');
     assert.equal(normalizeCommandText('/clean'), 'clean');
+    assert.equal(normalizeCommandText('🧹 ক্লিন চ্যাট ও ডাটা'), 'clean');
     assert.equal(normalizeCommandText('🧹 ক্লিন ড্যাশবোর্ড'), 'clean');
     assert.equal(normalizeCommandText('something-else'), null);
   });
