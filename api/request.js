@@ -140,11 +140,13 @@ export default async function handler(req, res) {
   // ---------------------------------------------------------------------------
   // 2. Deliver Telegram Bot Notification to Network Administrator
   // ---------------------------------------------------------------------------
+  const tz = process.env.TIMEZONE || 'Asia/Dhaka';
   const timestamp = new Date().toLocaleString('en-US', {
-    timeZone: 'UTC',
+    timeZone: tz,
     dateStyle: 'medium',
     timeStyle: 'medium'
   });
+  const tzSuffix = tz === 'Asia/Dhaka' ? 'BST' : tz;
 
   const messageText = [
     '📶 *New Wi-Fi Access Request*',
@@ -152,7 +154,7 @@ export default async function handler(req, res) {
     `👤 *User:* ${escapeMarkdown(cleanName)}`,
     `🏷 *MAC:* \`${cleanMac}\``,
     cleanIp ? `🌐 *IP:* \`${escapeMarkdown(cleanIp)}\`` : null,
-    `⏰ *Timestamp:* ${timestamp} UTC`,
+    `⏰ *Timestamp:* ${timestamp} (${tzSuffix})`,
     '━━━━━━━━━━━━━━━━━━━━',
     'Select access duration below to authorize via router:'
   ].filter(Boolean).join('\n');

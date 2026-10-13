@@ -207,11 +207,15 @@ describe('lib/opennds.js FAS Token Parsing', () => {
 });
 
 describe('lib/bot-menu.js Helpers & Formatters', () => {
-  test('formatDateTime formats valid date and handles missing/invalid gracefully', () => {
+  test('formatDateTime formats valid date in Asia/Dhaka BST and handles missing/invalid gracefully', () => {
     const fixed = '2026-10-13T12:30:00.000Z';
     const result = formatDateTime(fixed);
     assert.equal(result.date, '13 Oct 2026');
-    assert.match(result.time, /12:30:00/);
+    assert.match(result.time, /06:30:00 PM BST/);
+
+    // Can also format in explicit timezone if requested
+    const utcResult = formatDateTime(fixed, 'UTC');
+    assert.match(utcResult.time, /12:30:00/);
 
     const empty = formatDateTime(null);
     assert.equal(empty.date, 'N/A');
