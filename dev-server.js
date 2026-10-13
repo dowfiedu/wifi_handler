@@ -16,8 +16,9 @@ import { fileURLToPath } from 'node:url';
 
 // Import our serverless handlers
 import requestHandler from './api/request.js';
-import webhookHandler from './api/webhook.js';
+import webhookHandler, { parseCallbackData } from './api/webhook.js';
 import pollHandler from './api/poll.js';
+import adminHandler from './api/admin.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -80,8 +81,24 @@ async function parseBody(req) {
   });
 }
 
-// In-memory queue used for local dev simulation if Upstash Redis credentials are not configured
+// In-memory queue and requests list used for local dev simulation if Upstash Redis credentials are not configured
 const localDevQueue = [];
+const localDevRequests = [
+  {
+    name: 'রহিম আহমেদ (Rahim)',
+    mac: '4a:8b:9c:1d:2e:3f',
+    ip: '192.168.1.105',
+    status: 'pending',
+    requestedAt: new Date(Date.now() - 1000 * 60 * 3).toISOString()
+  },
+  {
+    name: 'সাদিয়া ইসলাম (Sadia)',
+    mac: '6c:7d:8e:9f:0a:1b',
+    ip: '192.168.1.112',
+    status: 'pending',
+    requestedAt: new Date(Date.now() - 1000 * 60 * 12).toISOString()
+  }
+];
 
 const server = http.createServer(async (req, res) => {
   enhanceResponse(res);
@@ -92,7 +109,7 @@ const server = http.createServer(async (req, res) => {
   // Enable CORS for local testing
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-router-secret');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-router-secret, x-admin-password, x-admin-secret');
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
@@ -116,12 +133,21 @@ const server = http.createServer(async (req, res) => {
     console.log(`🏷  MAC:       ${mac || '(none)'}`);
     console.log(`🌐 IP:        ${ip || '(not provided)'}`);
     console.log(`💾 DB Store:  Saved to Upstash Redis -> key: "request:${mac}" [status: pending]`);
-    console.log('🔘 Buttons simulated: [1 Hour] [3 Hours] [Unlimited] [Reject]');
+    console.log('🔘 Buttons simulated: [30 Mins] [1 Hour] [Unlimited] [Reject / Terminate]');
     console.log('------------------------------------------------------\n');
 
     if (!name || !mac) {
       return res.status(400).json({ error: 'Field "name" and "mac" are required.' });
     }
+
+    // Store in dev simulation requests list
+    localDevRequests.unshift({
+      name: name.trim(),
+      mac: mac.trim().toLowerCase(),
+      ip: ip ? ip.trim() : '',
+      status: 'pending',
+      requestedAt: new Date().toISOString()
+    });
 
     return res.status(200).json({
       success: true,
@@ -130,11 +156,31 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
-  if (pathname === '/api/webhook') {
+  if (pathname === '/api/webhook' || pathname === '/api/telegram') {
     req.body = await parseBody(req);
     if (process.env.TELEGRAM_BOT_TOKEN && process.env.UPSTASH_REDIS_REST_URL) {
       return webhookHandler(req, res);
     }
+
+    // In local dev simulation mode:
+    const callbackQuery = req.body?.callback_query;
+    if (callbackQuery) {
+      const parsed = parseCallbackData(callbackQuery.data);
+      if (parsed) {
+        const { action, mac, duration } = parsed;
+        const cmd = action === 'auth' ? `ndsctl auth ${mac} ${duration}` : `ndsctl deauth ${mac}`;
+        localDevQueue.push(cmd);
+        console.log(`\n--- 📱 [LOCAL DEV: SIMULATED TELEGRAM CALLBACK] ---`);
+        console.log(`Action:         ${action.toUpperCase()}`);
+        console.log(`MAC:            ${mac}`);
+        console.log(`Duration:       ${duration !== null ? (duration === 0 ? 'Unlimited' : `${duration}m`) : 'N/A'}`);
+        console.log(`Router Command: ${cmd}`);
+        console.log(`Queue Size:     ${localDevQueue.length}`);
+        console.log(`-------------------------------------------------\n`);
+        return res.status(200).json({ ok: true, simulated: true, commandQueued: cmd });
+      }
+    }
+
     return res.status(200).json({ ok: true, simulated: true });
   }
 
@@ -153,8 +199,104 @@ const server = http.createServer(async (req, res) => {
     return res.status(200).json({ command: cmd, simulated: true });
   }
 
+  if (pathname === '/api/admin') {
+    req.body = await parseBody(req);
+
+    // If production Redis is configured along with admin password or router secret, run real handler
+    if (process.env.UPSTASH_REDIS_REST_URL && (process.env.ADMIN_PASSWORD || process.env.ROUTER_SECRET_KEY)) {
+      return adminHandler(req, res);
+    }
+
+    // Local dev simulation for Admin Dashboard
+    const devPassword = process.env.ADMIN_PASSWORD || process.env.ROUTER_SECRET_KEY || 'admin123';
+    const authHeader = req.headers['authorization'] || '';
+    const provided = authHeader.replace(/^Bearer\s+/i, '').trim() || req.headers['x-admin-password'];
+
+    // In dev mode: allow 'admin123' or configured password or anything if not strictly set
+    if (provided && provided !== devPassword && devPassword !== 'admin123') {
+      return res.status(401).json({ error: 'Unauthorized: Invalid admin credentials (Dev Mode).' });
+    }
+
+    if (req.method === 'GET') {
+      return res.status(200).json({
+        ok: true,
+        simulated: true,
+        pendingQueueCount: localDevQueue.length,
+        requests: localDevRequests
+      });
+    }
+
+    if (req.method === 'POST') {
+      const { action, mac, duration = 60, name } = req.body || {};
+
+      if (action === 'login') {
+        return res.status(200).json({ ok: true, simulated: true, message: 'Logged in successfully (Dev Mode).' });
+      }
+
+      if (action !== 'auth' && action !== 'deauth') {
+        return res.status(400).json({ error: 'Invalid action.' });
+      }
+
+      if (!mac) {
+        return res.status(400).json({ error: 'MAC address required.' });
+      }
+
+      const cleanMac = mac.trim().toLowerCase();
+      const dur = action === 'auth' ? parseInt(duration, 10) || 0 : null;
+      const cmd = action === 'auth' ? `ndsctl auth ${cleanMac} ${dur}` : `ndsctl deauth ${cleanMac}`;
+
+      localDevQueue.push(cmd);
+
+      // Update in local requests
+      const found = localDevRequests.find(r => r.mac.toLowerCase() === cleanMac);
+      if (found) {
+        found.status = action === 'auth' ? 'authorized' : 'rejected';
+        found.duration = dur;
+        found.reviewedAt = new Date().toISOString();
+        found.reviewedBy = 'Dev Admin';
+      } else {
+        localDevRequests.unshift({
+          name: name || 'Manual Entry',
+          mac: cleanMac,
+          status: action === 'auth' ? 'authorized' : 'rejected',
+          duration: dur,
+          requestedAt: new Date().toISOString(),
+          reviewedAt: new Date().toISOString(),
+          reviewedBy: 'Dev Admin'
+        });
+      }
+
+      console.log(`\n--- 🛡️ [LOCAL DEV: ADMIN ACTION] ---`);
+      console.log(`Action:         ${action.toUpperCase()}`);
+      console.log(`MAC:            ${cleanMac}`);
+      console.log(`Duration:       ${dur !== null ? (dur === 0 ? 'Unlimited' : `${dur}m`) : 'N/A'}`);
+      console.log(`Router Command: ${cmd}`);
+      console.log(`Queue Size:     ${localDevQueue.length}`);
+      console.log(`------------------------------------\n`);
+
+      return res.status(200).json({
+        ok: true,
+        success: true,
+        simulated: true,
+        action,
+        mac: cleanMac,
+        duration: dur,
+        commandQueued: cmd
+      });
+    }
+
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
+
   // --- Static File Serving ---
-  let filePath = pathname === '/' ? path.join(PUBLIC_DIR, 'index.html') : path.join(PUBLIC_DIR, pathname);
+  let filePath;
+  if (pathname === '/' || pathname === '/index.html') {
+    filePath = path.join(PUBLIC_DIR, 'index.html');
+  } else if (pathname === '/admin' || pathname === '/admin.html') {
+    filePath = path.join(PUBLIC_DIR, 'admin.html');
+  } else {
+    filePath = path.join(PUBLIC_DIR, pathname);
+  }
 
   // Security check to avoid path traversal
   if (!filePath.startsWith(PUBLIC_DIR)) {
@@ -187,7 +329,8 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
   console.log(`\n======================================================`);
   console.log(`🚀 Wi-Fi Captive Portal Dev Server running!`);
-  console.log(`🌐 Local URL:              http://localhost:${PORT}`);
+  console.log(`🌐 Captive Portal URL:     http://localhost:${PORT}`);
+  console.log(`🛡️ Admin Console URL:      http://localhost:${PORT}/admin`);
   console.log(`🔗 openNDS Simulation:     http://localhost:${PORT}/?clientmac=4a:8b:9c:1d:2e:3f&clientip=192.168.1.105&gatewayname=Guest-WiFi`);
   console.log(`======================================================\n`);
 });

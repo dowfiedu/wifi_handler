@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 
 import { escapeMarkdown, normalizeMac } from '../api/request.js';
 import { parseCallbackData } from '../api/webhook.js';
+import { parseCallbackData as parseCallbackDataTelegram } from '../api/telegram.js';
 import { timingSafeCompare } from '../api/poll.js';
+import { checkAdminAuth } from '../api/admin.js';
 
 describe('api/request.js Helpers', () => {
   test('escapeMarkdown escapes Markdown special characters', () => {
@@ -20,7 +22,16 @@ describe('api/request.js Helpers', () => {
 });
 
 describe('api/webhook.js Callback Parsing', () => {
-  test('parses auth with duration correctly', () => {
+  test('parses auth with 30 minutes duration correctly', () => {
+    const result = parseCallbackData('auth:00:11:22:33:44:55:30');
+    assert.deepEqual(result, {
+      action: 'auth',
+      mac: '00:11:22:33:44:55',
+      duration: 30
+    });
+  });
+
+  test('parses auth with 60 minutes (1 hour) duration correctly', () => {
     const result = parseCallbackData('auth:00:11:22:33:44:55:60');
     assert.deepEqual(result, {
       action: 'auth',
@@ -47,7 +58,25 @@ describe('api/webhook.js Callback Parsing', () => {
     });
   });
 
-  test('parses deauth correctly', () => {
+  test('parses auth with underscore separator auth_<mac>_<duration>', () => {
+    const result = parseCallbackData('auth_00:11:22:33:44:55_60');
+    assert.deepEqual(result, {
+      action: 'auth',
+      mac: '00:11:22:33:44:55',
+      duration: 60
+    });
+  });
+
+  test('parses deauth_<mac> terminate button callback correctly', () => {
+    const result = parseCallbackData('deauth_00:11:22:33:44:55');
+    assert.deepEqual(result, {
+      action: 'deauth',
+      mac: '00:11:22:33:44:55',
+      duration: null
+    });
+  });
+
+  test('parses deauth:<mac> correctly', () => {
     const result = parseCallbackData('deauth:00:11:22:33:44:55');
     assert.deepEqual(result, {
       action: 'deauth',
@@ -64,6 +93,11 @@ describe('api/webhook.js Callback Parsing', () => {
     assert.equal(parseCallbackData('auth:00:11:22:33:44:55:notanumber'), null);
     assert.equal(parseCallbackData('auth:00:11:22:33:44:55:-10'), null);
     assert.equal(parseCallbackData('deauth:invalid-mac'), null);
+    assert.equal(parseCallbackData('deauth_invalid-mac'), null);
+  });
+
+  test('api/telegram.js correctly aliases parseCallbackData', () => {
+    assert.equal(parseCallbackDataTelegram, parseCallbackData);
   });
 });
 
@@ -74,5 +108,32 @@ describe('api/poll.js Security Helpers', () => {
     assert.equal(timingSafeCompare('secret-key-123', 'short'), false);
     assert.equal(timingSafeCompare('', 'secret'), false);
     assert.equal(timingSafeCompare(null, 'secret'), false);
+  });
+});
+
+describe('api/admin.js Security & Authentication', () => {
+  test('checkAdminAuth authenticates Bearer token correctly', () => {
+    const req = { headers: { authorization: 'Bearer my-secret-pass' } };
+    assert.equal(checkAdminAuth(req, 'my-secret-pass'), true);
+    assert.equal(checkAdminAuth(req, 'wrong-pass'), false);
+  });
+
+  test('checkAdminAuth authenticates x-admin-password header', () => {
+    const req = { headers: { 'x-admin-password': 'custom-header-secret' } };
+    assert.equal(checkAdminAuth(req, 'custom-header-secret'), true);
+    assert.equal(checkAdminAuth(req, 'wrong-secret'), false);
+  });
+
+  test('checkAdminAuth authenticates query parameter', () => {
+    const req = { url: '/api/admin?password=query-secret-123', headers: {} };
+    assert.equal(checkAdminAuth(req, 'query-secret-123'), true);
+    assert.equal(checkAdminAuth(req, 'another-secret'), false);
+  });
+
+  test('checkAdminAuth rejects missing or empty credentials', () => {
+    assert.equal(checkAdminAuth({ headers: {} }, 'my-pass'), false);
+    assert.equal(checkAdminAuth({ headers: { authorization: '' } }, 'my-pass'), false);
+    assert.equal(checkAdminAuth(null, 'my-pass'), false);
+    assert.equal(checkAdminAuth({ headers: {} }, ''), false);
   });
 });

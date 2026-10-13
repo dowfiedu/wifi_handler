@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 
 import requestHandler from '../api/request.js';
 import webhookHandler from '../api/webhook.js';
+import telegramHandler from '../api/telegram.js';
 import pollHandler from '../api/poll.js';
+import adminHandler from '../api/admin.js';
 
 // Helper mock response factory
 function createMockRes() {
@@ -135,5 +137,224 @@ describe('API Endpoints Validation & Status Codes', () => {
     assert.equal(res.statusCode, 200);
     assert.equal(res.body.ok, true);
     assert.match(res.body.message, /No callback query/);
+  });
+
+  test('/api/telegram behaves identically to /api/webhook', async () => {
+    assert.equal(telegramHandler, webhookHandler);
+  });
+
+  test('/api/webhook processes auth callback and queues ndsctl auth with Terminate button', async () => {
+    process.env.TELEGRAM_BOT_TOKEN = 'test-token';
+    process.env.UPSTASH_REDIS_REST_URL = 'https://mock.upstash.io';
+    process.env.UPSTASH_REDIS_REST_TOKEN = 'mock-token';
+
+    const fetchCalls = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, options) => {
+      fetchCalls.push({ url: String(url), options });
+      if (String(url).includes('upstash.io')) {
+        return new Response(JSON.stringify([{ result: 1 }]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      return new Response(JSON.stringify({ ok: true, result: 1 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    };
+
+    try {
+      const req = {
+        method: 'POST',
+        body: {
+          callback_query: {
+            id: 'cb_123',
+            data: 'auth:aa:bb:cc:dd:ee:ff:30',
+            message: {
+              chat: { id: 98765 },
+              message_id: 42,
+              text: '📶 New Wi-Fi Access Request\n👤 User: Rahim\nSelect access duration below to authorize via router:'
+            },
+            from: { first_name: 'AdminUser' }
+          }
+        }
+      };
+      const res = createMockRes();
+      await webhookHandler(req, res);
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.ok, true);
+      assert.equal(res.body.commandQueued, 'ndsctl auth aa:bb:cc:dd:ee:ff 30');
+
+      // Verify Telegram editMessageText had the Terminate button
+      const editMsgCall = fetchCalls.find(c => c.url.includes('editMessageText'));
+      assert.ok(editMsgCall, 'editMessageText was called');
+      const body = JSON.parse(editMsgCall.options.body);
+      assert.deepEqual(body.reply_markup.inline_keyboard, [
+        [{ text: '❌ Terminate', callback_data: 'deauth_aa:bb:cc:dd:ee:ff' }]
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('/api/webhook processes deauth_<mac> callback and queues ndsctl deauth', async () => {
+    process.env.TELEGRAM_BOT_TOKEN = 'test-token';
+    process.env.UPSTASH_REDIS_REST_URL = 'https://mock.upstash.io';
+    process.env.UPSTASH_REDIS_REST_TOKEN = 'mock-token';
+
+    const fetchCalls = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, options) => {
+      fetchCalls.push({ url: String(url), options });
+      if (String(url).includes('upstash.io')) {
+        return new Response(JSON.stringify([{ result: 1 }]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      return new Response(JSON.stringify({ ok: true, result: 1 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    };
+
+    try {
+      const req = {
+        method: 'POST',
+        body: {
+          callback_query: {
+            id: 'cb_456',
+            data: 'deauth_aa:bb:cc:dd:ee:ff',
+            message: {
+              chat: { id: 98765 },
+              message_id: 42,
+              text: '📶 New Wi-Fi Access Request\n👤 User: Rahim\n\n✅ *Status:* Authorized (30m) by AdminUser'
+            },
+            from: { first_name: 'AdminUser' }
+          }
+        }
+      };
+      const res = createMockRes();
+      await webhookHandler(req, res);
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.ok, true);
+      assert.equal(res.body.commandQueued, 'ndsctl deauth aa:bb:cc:dd:ee:ff');
+
+      // Verify Telegram editMessageText removed the buttons
+      const editMsgCall = fetchCalls.find(c => c.url.includes('editMessageText'));
+      assert.ok(editMsgCall, 'editMessageText was called');
+      const body = JSON.parse(editMsgCall.options.body);
+      assert.deepEqual(body.reply_markup.inline_keyboard, []);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('/api/admin rejects unsupported HTTP method with 405', async () => {
+    const req = { method: 'DELETE', headers: {} };
+    const res = createMockRes();
+
+    await adminHandler(req, res);
+
+    assert.equal(res.statusCode, 405);
+    assert.match(res.body.error, /Method DELETE Not Allowed/);
+    assert.equal(res.headers['allow'], 'GET, POST');
+  });
+
+  test('/api/admin returns 500 when admin credentials are not configured', async () => {
+    delete process.env.ADMIN_PASSWORD;
+    delete process.env.ROUTER_SECRET_KEY;
+
+    const req = { method: 'GET', headers: {} };
+    const res = createMockRes();
+
+    await adminHandler(req, res);
+
+    assert.equal(res.statusCode, 500);
+    assert.match(res.body.error, /Admin credentials are not configured/);
+  });
+
+  test('/api/admin rejects unauthorized requests with 401', async () => {
+    process.env.ADMIN_PASSWORD = 'super-secret-admin';
+
+    const reqWithoutAuth = { method: 'GET', headers: {} };
+    const resWithoutAuth = createMockRes();
+    await adminHandler(reqWithoutAuth, resWithoutAuth);
+    assert.equal(resWithoutAuth.statusCode, 401);
+
+    const reqWrongAuth = {
+      method: 'GET',
+      headers: { authorization: 'Bearer wrong-password' }
+    };
+    const resWrongAuth = createMockRes();
+    await adminHandler(reqWrongAuth, resWrongAuth);
+    assert.equal(resWrongAuth.statusCode, 401);
+  });
+
+  test('/api/admin POST verifies login action successfully', async () => {
+    process.env.ADMIN_PASSWORD = 'correct-password';
+
+    const req = {
+      method: 'POST',
+      headers: { authorization: 'Bearer correct-password' },
+      body: { action: 'login' }
+    };
+    const res = createMockRes();
+
+    await adminHandler(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.ok, true);
+  });
+
+  test('/api/admin POST rejects invalid MAC address with 400', async () => {
+    process.env.ADMIN_PASSWORD = 'correct-password';
+
+    const req = {
+      method: 'POST',
+      headers: { authorization: 'Bearer correct-password' },
+      body: { action: 'auth', mac: 'invalid-mac', duration: 60 }
+    };
+    const res = createMockRes();
+
+    await adminHandler(req, res);
+
+    assert.equal(res.statusCode, 400);
+    assert.match(res.body.error, /valid MAC address/);
+  });
+
+  test('/api/admin POST rejects invalid action with 400', async () => {
+    process.env.ADMIN_PASSWORD = 'correct-password';
+
+    const req = {
+      method: 'POST',
+      headers: { authorization: 'Bearer correct-password' },
+      body: { action: 'unknown-action', mac: '00:11:22:33:44:55' }
+    };
+    const res = createMockRes();
+
+    await adminHandler(req, res);
+
+    assert.equal(res.statusCode, 400);
+    assert.match(res.body.error, /Invalid action/);
+  });
+
+  test('/api/admin POST rejects negative duration with 400', async () => {
+    process.env.ADMIN_PASSWORD = 'correct-password';
+
+    const req = {
+      method: 'POST',
+      headers: { authorization: 'Bearer correct-password' },
+      body: { action: 'auth', mac: '00:11:22:33:44:55', duration: -10 }
+    };
+    const res = createMockRes();
+
+    await adminHandler(req, res);
+
+    assert.equal(res.statusCode, 400);
+    assert.match(res.body.error, /duration/);
   });
 });

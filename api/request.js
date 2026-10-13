@@ -145,12 +145,12 @@ export default async function handler(req, res) {
   const replyMarkup = {
     inline_keyboard: [
       [
-        { text: '⏱ 1 Hour', callback_data: `auth:${cleanMac}:60` },
-        { text: '⏱ 3 Hours', callback_data: `auth:${cleanMac}:180` }
+        { text: '⏱ 30 Mins', callback_data: `auth:${cleanMac}:30` },
+        { text: '⏱ 1 Hour', callback_data: `auth:${cleanMac}:60` }
       ],
       [
         { text: '♾ Unlimited', callback_data: `auth:${cleanMac}:0` },
-        { text: '❌ Reject / Deauth', callback_data: `deauth:${cleanMac}` }
+        { text: '❌ Reject', callback_data: `deauth_${cleanMac}` }
       ]
     ]
   };

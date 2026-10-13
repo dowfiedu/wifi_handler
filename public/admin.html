@@ -1,0 +1,1514 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Wi-Fi Admin Console • ওয়াইফাই অ্যাডমিন প্যানেল</title>
+  <style>
+    :root {
+      --bg-gradient: linear-gradient(135deg, #0b1120 0%, #0f172a 50%, #1e293b 100%);
+      --card-bg: rgba(30, 41, 59, 0.78);
+      --card-border: rgba(255, 255, 255, 0.12);
+      --accent: #38bdf8;
+      --accent-hover: #0284c7;
+      --accent-glow: rgba(56, 189, 248, 0.25);
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --success: #10b981;
+      --success-glow: rgba(16, 185, 129, 0.25);
+      --warning: #f59e0b;
+      --warning-glow: rgba(245, 158, 11, 0.25);
+      --error: #ef4444;
+      --error-glow: rgba(239, 68, 68, 0.25);
+      --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: var(--font-family);
+      background: var(--bg-gradient);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 1.5rem 1rem 3rem 1rem;
+      position: relative;
+      overflow-x: hidden;
+    }
+
+    /* Ambient background glows */
+    .glow-sphere {
+      position: fixed;
+      width: 500px;
+      height: 500px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(56, 189, 248, 0.12) 0%, rgba(56, 189, 248, 0) 70%);
+      top: -100px;
+      right: -100px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .glow-sphere-2 {
+      position: fixed;
+      width: 450px;
+      height: 450px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(16, 185, 129, 0.08) 0%, rgba(16, 185, 129, 0) 70%);
+      bottom: -100px;
+      left: -100px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 1100px;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* Top Bar Header */
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 1rem;
+      margin-bottom: 1.75rem;
+      padding-bottom: 1.25rem;
+      border-bottom: 1px solid var(--card-border);
+    }
+
+    .header-brand {
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+    }
+
+    .brand-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, rgba(56, 189, 248, 0.2), rgba(16, 185, 129, 0.2));
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--accent);
+    }
+
+    .brand-icon svg {
+      width: 24px;
+      height: 24px;
+    }
+
+    .brand-text h1 {
+      font-size: 1.35rem;
+      font-weight: 700;
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .brand-text p {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      margin-top: 0.15rem;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.45rem;
+      padding: 0.55rem 1rem;
+      border-radius: 10px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: all 0.2s ease;
+      text-decoration: none;
+    }
+
+    .btn svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #0f172a;
+    }
+    .btn-primary:hover {
+      background: var(--accent-hover);
+      box-shadow: 0 0 15px var(--accent-glow);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-main);
+      border: 1px solid var(--card-border);
+    }
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.14);
+    }
+
+    .btn-success {
+      background: var(--success);
+      color: #064e3b;
+    }
+    .btn-success:hover {
+      filter: brightness(1.1);
+      box-shadow: 0 0 12px var(--success-glow);
+    }
+
+    .btn-danger {
+      background: rgba(239, 68, 68, 0.15);
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+    .btn-danger:hover {
+      background: rgba(239, 68, 68, 0.25);
+    }
+
+    .btn-sm {
+      padding: 0.35rem 0.65rem;
+      font-size: 0.78rem;
+      border-radius: 8px;
+    }
+
+    /* Auto-refresh indicator badge */
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      padding: 0.4rem 0.85rem;
+      border-radius: 20px;
+      font-size: 0.78rem;
+      background: rgba(16, 185, 129, 0.1);
+      border: 1px solid rgba(16, 185, 129, 0.25);
+      color: #34d399;
+    }
+
+    .pulsing-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: var(--success);
+      box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+      animation: pulse 1.8s infinite;
+    }
+
+    @keyframes pulse {
+      0% {
+        box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+      }
+      70% {
+        box-shadow: 0 0 0 8px rgba(16, 185, 129, 0);
+      }
+      100% {
+        box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+      }
+    }
+
+    /* Metric Stats Cards */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.75rem;
+    }
+
+    .stat-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-radius: 16px;
+      padding: 1.15rem 1.25rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
+    }
+
+    .stat-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .stat-icon svg {
+      width: 22px;
+      height: 22px;
+    }
+
+    .stat-icon.pending {
+      background: rgba(245, 158, 11, 0.15);
+      color: var(--warning);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+    }
+
+    .stat-icon.authorized {
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--success);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    .stat-icon.queue {
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--accent);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+    }
+
+    .stat-icon.total {
+      background: rgba(148, 163, 184, 0.15);
+      color: var(--text-muted);
+      border: 1px solid rgba(148, 163, 184, 0.25);
+    }
+
+    .stat-content {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .stat-label {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+    }
+
+    .stat-value {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--text-main);
+      line-height: 1.2;
+      margin-top: 0.15rem;
+    }
+
+    /* Section Cards */
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-radius: 20px;
+      padding: 1.5rem;
+      margin-bottom: 1.75rem;
+      box-shadow: 0 15px 35px -5px rgba(0, 0, 0, 0.5);
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .card-title {
+      font-size: 1.15rem;
+      font-weight: 600;
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .card-subtitle {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      margin-top: 0.2rem;
+    }
+
+    /* Manual Authorization Form */
+    .manual-auth-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr auto;
+      gap: 0.85rem;
+      align-items: flex-end;
+    }
+
+    @media (max-width: 768px) {
+      .manual-auth-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+
+    .form-label {
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: var(--text-muted);
+    }
+
+    .form-control {
+      background: rgba(15, 23, 42, 0.7);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 0.65rem 0.85rem;
+      color: var(--text-main);
+      font-family: var(--font-family);
+      font-size: 0.88rem;
+      transition: all 0.2s ease;
+      width: 100%;
+    }
+
+    .form-control:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+
+    .form-control::placeholder {
+      color: rgba(148, 163, 184, 0.5);
+    }
+
+    .duration-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+      margin-top: 0.75rem;
+    }
+
+    .duration-pill {
+      padding: 0.35rem 0.75rem;
+      border-radius: 20px;
+      font-size: 0.78rem;
+      font-weight: 500;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--card-border);
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .duration-pill:hover, .duration-pill.active {
+      background: rgba(56, 189, 248, 0.15);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    /* Requests Table & Filter Controls */
+    .table-controls {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+
+    .search-box {
+      position: relative;
+      min-width: 250px;
+      flex: 1;
+      max-width: 360px;
+    }
+
+    .search-box svg {
+      position: absolute;
+      left: 0.75rem;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 16px;
+      height: 16px;
+      color: var(--text-muted);
+      pointer-events: none;
+    }
+
+    .search-box input {
+      padding-left: 2.2rem;
+    }
+
+    .filter-tabs {
+      display: flex;
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 0.25rem;
+      gap: 0.2rem;
+    }
+
+    .filter-tab {
+      padding: 0.35rem 0.75rem;
+      border-radius: 8px;
+      font-size: 0.78rem;
+      font-weight: 500;
+      color: var(--text-muted);
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .filter-tab.active {
+      background: rgba(56, 189, 248, 0.2);
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    /* Requests List / Table */
+    .requests-table-wrapper {
+      overflow-x: auto;
+      border-radius: 12px;
+      border: 1px solid var(--card-border);
+      background: rgba(15, 23, 42, 0.4);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 0.85rem;
+    }
+
+    th {
+      background: rgba(255, 255, 255, 0.04);
+      padding: 0.85rem 1rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--card-border);
+    }
+
+    td {
+      padding: 1rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      vertical-align: middle;
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    tr:hover td {
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .user-info {
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+    }
+
+    .user-name {
+      font-weight: 600;
+      color: var(--text-main);
+    }
+
+    .user-ip {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-family: monospace;
+    }
+
+    .mac-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-family: monospace;
+      font-size: 0.85rem;
+      background: rgba(255, 255, 255, 0.06);
+      padding: 0.3rem 0.6rem;
+      border-radius: 6px;
+      color: var(--accent);
+      border: 1px solid rgba(56, 189, 248, 0.2);
+    }
+
+    .copy-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      padding: 2px;
+      border-radius: 4px;
+      transition: color 0.2s;
+    }
+    .copy-btn:hover {
+      color: var(--text-main);
+    }
+
+    .copy-btn svg {
+      width: 14px;
+      height: 14px;
+    }
+
+    /* Badges */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.3rem 0.65rem;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+
+    .badge-pending {
+      background: rgba(245, 158, 11, 0.15);
+      color: var(--warning);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+    }
+
+    .badge-authorized {
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--success);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    .badge-rejected {
+      background: rgba(239, 68, 68, 0.15);
+      color: var(--error);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+
+    /* Action buttons cell */
+    .actions-cell {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      flex-wrap: wrap;
+    }
+
+    .empty-state {
+      padding: 3rem 1rem;
+      text-align: center;
+      color: var(--text-muted);
+    }
+
+    .empty-state svg {
+      width: 48px;
+      height: 48px;
+      margin-bottom: 0.75rem;
+      opacity: 0.4;
+    }
+
+    /* Toast Notification Container */
+    #toast-container {
+      position: fixed;
+      top: 1.25rem;
+      right: 1.25rem;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+      pointer-events: none;
+    }
+
+    .toast {
+      pointer-events: auto;
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid var(--card-border);
+      backdrop-filter: blur(12px);
+      border-radius: 12px;
+      padding: 0.85rem 1.15rem;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+      color: var(--text-main);
+      font-size: 0.85rem;
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      animation: slideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      max-width: 380px;
+    }
+
+    .toast-success {
+      border-left: 4px solid var(--success);
+    }
+    .toast-error {
+      border-left: 4px solid var(--error);
+    }
+    .toast-info {
+      border-left: 4px solid var(--accent);
+    }
+
+    @keyframes slideIn {
+      from {
+        transform: translateX(100%);
+        opacity: 0;
+      }
+      to {
+        transform: translateX(0);
+        opacity: 1;
+      }
+    }
+
+    /* Login Modal Overlay */
+    #login-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(11, 17, 32, 0.88);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.25rem;
+    }
+
+    .login-card {
+      width: 100%;
+      max-width: 400px;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 24px;
+      padding: 2.25rem 2rem;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+      text-align: center;
+    }
+
+    .login-icon {
+      width: 56px;
+      height: 56px;
+      margin: 0 auto 1.25rem auto;
+      border-radius: 16px;
+      background: linear-gradient(135deg, rgba(56, 189, 248, 0.2), rgba(16, 185, 129, 0.2));
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--accent);
+    }
+
+    .login-icon svg {
+      width: 28px;
+      height: 28px;
+    }
+
+    .login-card h2 {
+      font-size: 1.4rem;
+      font-weight: 700;
+      margin-bottom: 0.45rem;
+    }
+
+    .login-card p {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      margin-bottom: 1.75rem;
+      line-height: 1.4;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    /* Custom Duration Modal */
+    #custom-duration-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(8px);
+      z-index: 1001;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+
+    .modal-card {
+      width: 100%;
+      max-width: 360px;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 20px;
+      padding: 1.75rem;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+    }
+  </style>
+</head>
+<body>
+  <div class="glow-sphere"></div>
+  <div class="glow-sphere-2"></div>
+  <div id="toast-container"></div>
+
+  <!-- ========================================================================= -->
+  <!-- 1. LOGIN OVERLAY MODAL -->
+  <!-- ========================================================================= -->
+  <div id="login-overlay">
+    <div class="login-card">
+      <div class="login-icon">
+        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+        </svg>
+      </div>
+      <h2>অ্যাডমিন লগইন</h2>
+      <p>ওয়াইফাই নেটওয়ার্ক নিয়ন্ত্রণ ও অনুমোদন করতে অ্যাডমিন পাসওয়ার্ড লিখুন</p>
+
+      <form id="login-form">
+        <div class="form-group" style="margin-bottom: 1.25rem;">
+          <input
+            type="password"
+            id="login-password-input"
+            class="form-control"
+            placeholder="ADMIN_PASSWORD বা ROUTER_SECRET_KEY"
+            required
+            autocomplete="current-password"
+            style="text-align: center; font-size: 1rem; letter-spacing: 0.1em;"
+          />
+        </div>
+        <div style="display: flex; align-items: center; justify-content: center; gap: 0.45rem; margin-bottom: 1.25rem; font-size: 0.8rem; color: var(--text-muted);">
+          <input type="checkbox" id="remember-password" checked style="accent-color: var(--accent); cursor: pointer;" />
+          <label for="remember-password" style="cursor: pointer;">এই ব্রাউজারে মনে রাখুন (Remember)</label>
+        </div>
+        <button type="submit" id="login-btn" class="btn btn-primary" style="width: 100%; padding: 0.75rem;">
+          প্রবেশ করুন • Login
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- 2. MAIN ADMIN DASHBOARD -->
+  <!-- ========================================================================= -->
+  <div class="container hidden" id="dashboard-container">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-brand">
+        <div class="brand-icon">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1>Wi-Fi Admin Console <span style="font-size: 0.8rem; font-weight: normal; color: var(--accent); border: 1px solid rgba(56,189,248,0.3); padding: 2px 8px; border-radius: 12px;">openNDS</span></h1>
+          <p>ওয়াইফাই ইউজার অনুমোদন ও নিয়ন্ত্রণ ড্যাশবোর্ড</p>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <div class="status-pill" id="live-indicator">
+          <div class="pulsing-dot"></div>
+          <span>লাইভ (Live)</span>
+        </div>
+        <button id="refresh-btn" class="btn btn-secondary" title="রিলোড করুন">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+          </svg>
+          রিফ্রেশ
+        </button>
+        <button id="logout-btn" class="btn btn-danger btn-sm" title="লগআউট">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+          </svg>
+          লগআউট
+        </button>
+      </div>
+    </header>
+
+    <!-- Stat Metric Cards -->
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-icon pending">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+        </div>
+        <div class="stat-content">
+          <span class="stat-label">অপেক্ষমাণ রিকোয়েস্ট (Pending)</span>
+          <span class="stat-value" id="stat-pending">0</span>
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-icon authorized">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+        </div>
+        <div class="stat-content">
+          <span class="stat-label">অনুমোদিত ডিভাইস (Active)</span>
+          <span class="stat-value" id="stat-authorized">0</span>
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-icon queue">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+          </svg>
+        </div>
+        <div class="stat-content">
+          <span class="stat-label">রাউটার কিউ (Pending Commands)</span>
+          <span class="stat-value" id="stat-queue">0</span>
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-icon total">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/>
+          </svg>
+        </div>
+        <div class="stat-content">
+          <span class="stat-label">মোট রেকর্ড (Total Requests)</span>
+          <span class="stat-value" id="stat-total">0</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Quick Manual Authorization Card -->
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <div class="card-title">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="color: var(--accent);">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            সরাসরি অনুমোদন ও এক্সেস প্রদান (Direct Accept / Custom MAC)
+          </div>
+          <div class="card-subtitle">যেকোনো ডিভাইসের MAC অ্যাড্রেসে সরাসরি ইন্টারনেট অনুমোদন অথবা সংযোগ বিচ্ছিন্ন করুন</div>
+        </div>
+      </div>
+
+      <form id="manual-auth-form">
+        <div class="manual-auth-grid">
+          <div class="form-group">
+            <label class="form-label" for="manual-mac">ক্লায়েন্ট MAC অ্যাড্রেস (Client MAC)</label>
+            <input
+              type="text"
+              id="manual-mac"
+              class="form-control"
+              placeholder="e.g. 4A:8B:9C:1D:2E:3F"
+              required
+              maxlength="17"
+            />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="manual-name">ইউজারের নাম বা নোট (User Name / Note)</label>
+            <input
+              type="text"
+              id="manual-name"
+              class="form-control"
+              placeholder="e.g. Guest / তানভীর"
+            />
+          </div>
+
+          <div style="display: flex; gap: 0.5rem;">
+            <button type="submit" class="btn btn-success" id="manual-submit-btn">
+              <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+              </svg>
+              অনুমোদন দিন (Authorize)
+            </button>
+            <button type="button" class="btn btn-danger" id="manual-deauth-btn" title="সংযোগ বিচ্ছিন্ন করুন">
+              <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+              বাতিল (Deauth)
+            </button>
+          </div>
+        </div>
+
+        <div style="margin-top: 0.85rem;">
+          <span class="form-label">ইন্টারনেট মেয়াদ (Duration):</span>
+          <div class="duration-pills" id="manual-duration-pills">
+            <button type="button" class="duration-pill" data-minutes="30">৩০ মিনিট</button>
+            <button type="button" class="duration-pill active" data-minutes="60">১ ঘণ্টা (ডিফল্ট)</button>
+            <button type="button" class="duration-pill" data-minutes="180">৩ ঘণ্টা</button>
+            <button type="button" class="duration-pill" data-minutes="720">১২ ঘণ্টা</button>
+            <button type="button" class="duration-pill" data-minutes="1440">২৪ ঘণ্টা</button>
+            <button type="button" class="duration-pill" data-minutes="0">♾️ আনলিমিটেড (০ মিনিট)</button>
+          </div>
+        </div>
+      </form>
+    </div>
+
+    <!-- Live Requests List Table -->
+    <div class="card">
+      <div class="card-header">
+        <div>
+          <div class="card-title">
+            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="color: var(--accent);">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 10h16M4 14h16M4 18h16"/>
+            </svg>
+            ইউজারদের ইন্টারনেট আবেদনের তালিকা (Access Requests)
+          </div>
+          <div class="card-subtitle">ক্যাপটিভ পোর্টাল থেকে আসা লাইভ আবেদনসমূহ সরাসরি এক ক্লিকে অনুমোদন বা বাতিল করুন</div>
+        </div>
+      </div>
+
+      <!-- Controls & Filter Bar -->
+      <div class="table-controls">
+        <div class="search-box">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+          </svg>
+          <input type="text" id="search-input" class="form-control" placeholder="নাম বা MAC অ্যাড্রেস খুঁজুন..." />
+        </div>
+
+        <div class="filter-tabs" id="status-filter-tabs">
+          <button class="filter-tab active" data-filter="all">সব (All)</button>
+          <button class="filter-tab" data-filter="pending">অপেক্ষমাণ (Pending)</button>
+          <button class="filter-tab" data-filter="authorized">অনুমোদিত (Authorized)</button>
+          <button class="filter-tab" data-filter="rejected">বাতিলকৃত (Rejected)</button>
+        </div>
+      </div>
+
+      <!-- Table Wrapper -->
+      <div class="requests-table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>ইউজার বিবরণ (User)</th>
+              <th>MAC অ্যাড্রেস</th>
+              <th>আবেদনের সময় (Time)</th>
+              <th>বর্তমান অবস্থা (Status)</th>
+              <th style="text-align: right;">সরাসরি অ্যাকশন (Actions)</th>
+            </tr>
+          </thead>
+          <tbody id="requests-tbody">
+            <tr>
+              <td colspan="5" class="empty-state">
+                <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+                <p>ডেটা লোড হচ্ছে...</p>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- 3. CUSTOM DURATION MODAL -->
+  <!-- ========================================================================= -->
+  <div id="custom-duration-modal" class="hidden">
+    <div class="modal-card">
+      <h3 style="margin-bottom: 0.5rem; font-size: 1.15rem;">কাস্টম সময় নির্ধারণ করুন</h3>
+      <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1rem;" id="modal-target-mac">MAC: </p>
+
+      <form id="custom-duration-form">
+        <div class="form-group" style="margin-bottom: 1.25rem;">
+          <label class="form-label" for="custom-minutes-input">মেয়াদ মিনিট হিসেবে (০ = আনলিমিটেড):</label>
+          <input
+            type="number"
+            id="custom-minutes-input"
+            class="form-control"
+            min="0"
+            max="43200"
+            value="120"
+            required
+          />
+        </div>
+        <div style="display: flex; justify-content: flex-end; gap: 0.5rem;">
+          <button type="button" class="btn btn-secondary btn-sm" id="modal-cancel-btn">বন্ধ করুন</button>
+          <button type="submit" class="btn btn-primary btn-sm">অনুমোদন নিশ্চিত করুন</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- 4. CLIENT JAVASCRIPT LOGIC -->
+  <!-- ========================================================================= -->
+  <script>
+    // State management
+    let adminToken = localStorage.getItem('wifi_admin_secret') || '';
+    let requestsData = [];
+    let currentFilter = 'all';
+    let searchQuery = '';
+    let selectedManualDuration = 60;
+    let refreshInterval = null;
+    let modalTargetMac = '';
+    let modalTargetName = '';
+
+    // DOM Elements
+    const loginOverlay = document.getElementById('login-overlay');
+    const loginForm = document.getElementById('login-form');
+    const loginPasswordInput = document.getElementById('login-password-input');
+    const rememberCheckbox = document.getElementById('remember-password');
+    const dashboardContainer = document.getElementById('dashboard-container');
+    const logoutBtn = document.getElementById('logout-btn');
+    const refreshBtn = document.getElementById('refresh-btn');
+    const toastContainer = document.getElementById('toast-container');
+
+    const statPending = document.getElementById('stat-pending');
+    const statAuthorized = document.getElementById('stat-authorized');
+    const statQueue = document.getElementById('stat-queue');
+    const statTotal = document.getElementById('stat-total');
+
+    const requestsTbody = document.getElementById('requests-tbody');
+    const searchInput = document.getElementById('search-input');
+    const filterTabs = document.querySelectorAll('.filter-tab');
+
+    const manualAuthForm = document.getElementById('manual-auth-form');
+    const manualMacInput = document.getElementById('manual-mac');
+    const manualNameInput = document.getElementById('manual-name');
+    const manualDeauthBtn = document.getElementById('manual-deauth-btn');
+    const manualDurationPills = document.querySelectorAll('#manual-duration-pills .duration-pill');
+
+    const customModal = document.getElementById('custom-duration-modal');
+    const customForm = document.getElementById('custom-duration-form');
+    const customMinutesInput = document.getElementById('custom-minutes-input');
+    const modalTargetMacLabel = document.getElementById('modal-target-mac');
+    const modalCancelBtn = document.getElementById('modal-cancel-btn');
+
+    // Toast helper
+    function showToast(message, type = 'info') {
+      const toast = document.createElement('div');
+      toast.className = `toast toast-${type}`;
+      
+      const icons = {
+        success: '✅',
+        error: '❌',
+        info: 'ℹ️'
+      };
+
+      toast.innerHTML = `<span>${icons[type] || 'ℹ️'}</span> <span>${message}</span>`;
+      toastContainer.appendChild(toast);
+
+      setTimeout(() => {
+        toast.style.transition = 'all 0.3s ease';
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(-10px)';
+        setTimeout(() => toast.remove(), 300);
+      }, 4000);
+    }
+
+    // Relative time formatting
+    function formatTimeAgo(isoString) {
+      if (!isoString) return '—';
+      try {
+        const date = new Date(isoString);
+        const now = new Date();
+        const diffSecs = Math.floor((now - date) / 1000);
+
+        if (diffSecs < 10) return 'এইমাত্র (just now)';
+        if (diffSecs < 60) return `${diffSecs} সেকেন্ড আগে`;
+        const diffMins = Math.floor(diffSecs / 60);
+        if (diffMins < 60) return `${diffMins} মিনিট আগে`;
+        const diffHours = Math.floor(diffMins / 60);
+        if (diffHours < 24) return `${diffHours} ঘণ্টা আগে`;
+        return date.toLocaleDateString('bn-BD', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      } catch {
+        return isoString;
+      }
+    }
+
+    // Verify token or password with API
+    async function verifyAndLoad(token) {
+      try {
+        const res = await fetch('/api/admin', {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+
+        if (res.status === 401) {
+          throw new Error('অবৈধ অ্যাডমিন পাসওয়ার্ড / Invalid Password');
+        }
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || 'সার্ভারে সংযোগ ব্যর্থ হয়েছে');
+        }
+
+        const data = await res.json();
+        adminToken = token;
+
+        if (rememberCheckbox.checked) {
+          localStorage.setItem('wifi_admin_secret', token);
+        }
+
+        // Show dashboard
+        loginOverlay.classList.add('hidden');
+        dashboardContainer.classList.remove('hidden');
+
+        // Render received data
+        handleDataUpdate(data);
+
+        // Start auto-refresh polling (every 5 seconds)
+        startAutoRefresh();
+        showToast('অ্যাডমিন প্যানেলে স্বাগতম!', 'success');
+      } catch (err) {
+        showToast(err.message, 'error');
+        localStorage.removeItem('wifi_admin_secret');
+        loginOverlay.classList.remove('hidden');
+        dashboardContainer.classList.add('hidden');
+      }
+    }
+
+    // Fetch latest requests and queue count
+    async function fetchDashboardData() {
+      if (!adminToken) return;
+      try {
+        const res = await fetch('/api/admin', {
+          headers: {
+            'Authorization': `Bearer ${adminToken}`
+          }
+        });
+
+        if (res.status === 401) {
+          stopAutoRefresh();
+          showToast('সেশনের মেয়াদ শেষ হয়েছে। আবার লগইন করুন।', 'error');
+          localStorage.removeItem('wifi_admin_secret');
+          loginOverlay.classList.remove('hidden');
+          dashboardContainer.classList.add('hidden');
+          return;
+        }
+
+        if (!res.ok) return;
+
+        const data = await res.json();
+        handleDataUpdate(data);
+      } catch (err) {
+        console.warn('[Fetch Dashboard Error]', err);
+      }
+    }
+
+    // Handle and render dashboard data
+    function handleDataUpdate(data) {
+      requestsData = data.requests || [];
+      const queueCount = data.pendingQueueCount || 0;
+
+      // Calculate stats
+      const pendingCount = requestsData.filter(r => r.status === 'pending').length;
+      const authorizedCount = requestsData.filter(r => r.status === 'authorized').length;
+      const totalCount = requestsData.length;
+
+      statPending.textContent = pendingCount;
+      statAuthorized.textContent = authorizedCount;
+      statQueue.textContent = queueCount;
+      statTotal.textContent = totalCount;
+
+      renderTable();
+    }
+
+    // Render table rows based on filter & search
+    function renderTable() {
+      let filtered = [...requestsData];
+
+      // Filter by status
+      if (currentFilter !== 'all') {
+        filtered = filtered.filter(item => item.status === currentFilter);
+      }
+
+      // Filter by search query
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        filtered = filtered.filter(item => 
+          (item.name && item.name.toLowerCase().includes(q)) ||
+          (item.mac && item.mac.toLowerCase().includes(q)) ||
+          (item.ip && item.ip.toLowerCase().includes(q))
+        );
+      }
+
+      if (filtered.length === 0) {
+        requestsTbody.innerHTML = `
+          <tr>
+            <td colspan="5" class="empty-state">
+              <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"/>
+              </svg>
+              <p>কোনো রিকোয়েস্ট পাওয়া যায়নি</p>
+            </td>
+          </tr>
+        `;
+        return;
+      }
+
+      requestsTbody.innerHTML = filtered.map(item => {
+        const isPending = item.status === 'pending';
+        const isAuthorized = item.status === 'authorized';
+        const isRejected = item.status === 'rejected';
+
+        let badgeHtml = '';
+        if (isPending) {
+          badgeHtml = `<span class="badge badge-pending">🟡 অপেক্ষমাণ (Pending)</span>`;
+        } else if (isAuthorized) {
+          const durLabel = item.duration === 0 ? 'আনলিমিটেড' : `${item.duration}m`;
+          badgeHtml = `<span class="badge badge-authorized">🟢 অনুমোদিত (${durLabel})</span>`;
+        } else {
+          badgeHtml = `<span class="badge badge-rejected">🔴 বাতিলকৃত (Rejected)</span>`;
+        }
+
+        const safeName = item.name ? escapeHtml(item.name) : 'অজানা ইউজার';
+        const safeMac = escapeHtml(item.mac);
+        const safeIp = item.ip ? escapeHtml(item.ip) : '';
+
+        return `
+          <tr data-mac="${safeMac}">
+            <td>
+              <div class="user-info">
+                <span class="user-name">${safeName}</span>
+                ${safeIp ? `<span class="user-ip">IP: ${safeIp}</span>` : ''}
+              </div>
+            </td>
+            <td>
+              <span class="mac-badge">
+                ${safeMac}
+                <button class="copy-btn" onclick="copyMac('${safeMac}')" title="কপি করুন">
+                  <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                  </svg>
+                </button>
+              </span>
+            </td>
+            <td>
+              <span style="font-size: 0.8rem; color: var(--text-muted);">
+                ${formatTimeAgo(item.requestedAt)}
+              </span>
+            </td>
+            <td>
+              ${badgeHtml}
+            </td>
+            <td>
+              <div class="actions-cell" style="justify-content: flex-end;">
+                <button class="btn btn-success btn-sm" onclick="executeAction('auth', '${safeMac}', 60, '${safeName}')" title="১ ঘণ্টার জন্য এক্সেপ্ট করুন">
+                  ⚡ ১ ঘণ্টা
+                </button>
+                <button class="btn btn-secondary btn-sm" onclick="executeAction('auth', '${safeMac}', 180, '${safeName}')" title="৩ ঘণ্টার জন্য এক্সেপ্ট করুন">
+                  ৩ ঘণ্টা
+                </button>
+                <button class="btn btn-secondary btn-sm" onclick="executeAction('auth', '${safeMac}', 0, '${safeName}')" title="আনলিমিটেড এক্সেপ্ট করুন">
+                  ♾️ আনলিমিটেড
+                </button>
+                <button class="btn btn-secondary btn-sm" onclick="openCustomModal('${safeMac}', '${safeName}')" title="কাস্টম সময়">
+                  ⚙️
+                </button>
+                <button class="btn btn-danger btn-sm" onclick="executeAction('deauth', '${safeMac}', null, '${safeName}')" title="বাতিল বা ডিসকানেক্ট করুন">
+                  ❌ বাতিল
+                </button>
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    // HTML escape helper
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    // Execute Authorization or Deauthorization
+    async function executeAction(action, mac, duration = 60, name = '') {
+      if (!adminToken) return;
+
+      const durationLabel = duration === 0 ? 'আনলিমিটেড' : `${duration} মিনিট`;
+      const actionNotice = action === 'auth' ? `অনুমোদন করা হচ্ছে (${durationLabel})...` : 'বাতিল করা হচ্ছে...';
+      showToast(`${mac}: ${actionNotice}`, 'info');
+
+      try {
+        const res = await fetch('/api/admin', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${adminToken}`
+          },
+          body: JSON.stringify({
+            action,
+            mac,
+            duration: duration ?? 0,
+            name
+          })
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+          throw new Error(data.error || 'অ্যাকশন প্রক্রিয়া সম্পন্ন করা যায়নি।');
+        }
+
+        const successMsg = action === 'auth'
+          ? `✅ ${mac} (${name || 'User'}) কে ${durationLabel} অনুমোদন দেওয়া হয়েছে!`
+          : `❌ ${mac} (${name || 'User'}) সংযোগ বিচ্ছিন্ন / বাতিল করা হয়েছে!`;
+
+        showToast(successMsg, 'success');
+
+        // Optimistically update item in local array
+        const found = requestsData.find(r => r.mac.toLowerCase() === mac.toLowerCase());
+        if (found) {
+          found.status = action === 'auth' ? 'authorized' : 'rejected';
+          found.duration = duration;
+        } else {
+          requestsData.unshift({
+            name: name || 'Manual Entry',
+            mac,
+            status: action === 'auth' ? 'authorized' : 'rejected',
+            duration,
+            requestedAt: new Date().toISOString()
+          });
+        }
+
+        // Increment pending router queue count locally
+        const currentQueue = parseInt(statQueue.textContent || '0', 10);
+        statQueue.textContent = currentQueue + 1;
+
+        renderTable();
+
+        // Refresh latest state from server
+        fetchDashboardData();
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    }
+
+    // Copy MAC Address to clipboard
+    window.copyMac = function(mac) {
+      navigator.clipboard.writeText(mac).then(() => {
+        showToast(`MAC ${mac} কপি করা হয়েছে!`, 'info');
+      }).catch(() => {
+        showToast(`কপি ব্যর্থ হয়েছে: ${mac}`, 'error');
+      });
+    };
+
+    // Global action executor
+    window.executeAction = executeAction;
+
+    // Custom Duration Modal handler
+    window.openCustomModal = function(mac, name) {
+      modalTargetMac = mac;
+      modalTargetName = name;
+      modalTargetMacLabel.textContent = `ডিভাইস: ${name || 'User'} (${mac})`;
+      customModal.classList.remove('hidden');
+      customMinutesInput.focus();
+    };
+
+    modalCancelBtn.addEventListener('click', () => {
+      customModal.classList.add('hidden');
+    });
+
+    customForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const minutes = parseInt(customMinutesInput.value, 10);
+      customModal.classList.add('hidden');
+      executeAction('auth', modalTargetMac, isNaN(minutes) ? 60 : minutes, modalTargetName);
+    });
+
+    // Auto Refresh management
+    function startAutoRefresh() {
+      stopAutoRefresh();
+      refreshInterval = setInterval(fetchDashboardData, 5000);
+    }
+
+    function stopAutoRefresh() {
+      if (refreshInterval) {
+        clearInterval(refreshInterval);
+        refreshInterval = null;
+      }
+    }
+
+    // Login Form Submission
+    loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const password = loginPasswordInput.value.trim();
+      if (!password) return;
+      await verifyAndLoad(password);
+    });
+
+    // Logout
+    logoutBtn.addEventListener('click', () => {
+      stopAutoRefresh();
+      localStorage.removeItem('wifi_admin_secret');
+      adminToken = '';
+      dashboardContainer.classList.add('hidden');
+      loginOverlay.classList.remove('hidden');
+      loginPasswordInput.value = '';
+      showToast('লগআউট সম্পন্ন হয়েছে।', 'info');
+    });
+
+    // Manual Refresh
+    refreshBtn.addEventListener('click', () => {
+      showToast('রিফ্রেশ করা হচ্ছে...', 'info');
+      fetchDashboardData();
+    });
+
+    // Filter tabs
+    filterTabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        filterTabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        currentFilter = tab.dataset.filter;
+        renderTable();
+      });
+    });
+
+    // Search input
+    searchInput.addEventListener('input', (e) => {
+      searchQuery = e.target.value;
+      renderTable();
+    });
+
+    // Manual Duration Pills
+    manualDurationPills.forEach(pill => {
+      pill.addEventListener('click', () => {
+        manualDurationPills.forEach(p => p.classList.remove('active'));
+        pill.classList.add('active');
+        selectedManualDuration = parseInt(pill.dataset.minutes, 10);
+      });
+    });
+
+    // Manual Authorization Form
+    manualAuthForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const mac = manualMacInput.value.trim();
+      const name = manualNameInput.value.trim();
+      if (!mac) return;
+
+      executeAction('auth', mac, selectedManualDuration, name || 'Manual Entry');
+      manualMacInput.value = '';
+      manualNameInput.value = '';
+    });
+
+    // Manual Deauth Button
+    manualDeauthBtn.addEventListener('click', () => {
+      const mac = manualMacInput.value.trim();
+      const name = manualNameInput.value.trim();
+      if (!mac) {
+        showToast('সংযোগ বিচ্ছিন্ন করার জন্য MAC অ্যাড্রেস লিখুন।', 'error');
+        return;
+      }
+      executeAction('deauth', mac, null, name || 'Manual Entry');
+      manualMacInput.value = '';
+      manualNameInput.value = '';
+    });
+
+    // Auto-login if token saved in localStorage
+    window.addEventListener('DOMContentLoaded', () => {
+      if (adminToken) {
+        verifyAndLoad(adminToken);
+      }
+    });
+  </script>
+</body>
+</html>

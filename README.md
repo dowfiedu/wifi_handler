@@ -1,6 +1,6 @@
-# OpenWrt openNDS ⟷ Telegram Bot Captive Portal Bridge
+# OpenWrt openNDS ⟷ Telegram Bot & Web Admin Captive Portal Bridge
 
-A lightweight, production-ready serverless bridge deployed on **Vercel** to connect an **OpenWrt** router running the **openNDS** captive portal with a **Telegram Bot** using **Upstash Redis** as a command queue.
+A lightweight, production-ready serverless bridge deployed on **Vercel** to connect an **OpenWrt** router running the **openNDS** captive portal with a **Telegram Bot** and an **Admin Web Console** using **Upstash Redis** as a command queue.
 
 ---
 
@@ -25,20 +25,24 @@ A lightweight, production-ready serverless bridge deployed on **Vercel** to conn
                     └────────────┬────────────┘
                                  │ 3. POST /api/request { name, mac }
                                  ▼
-                    ┌─────────────────────────┐
-                    │  Telegram Bot API       │
-                    │  (Sends Admin Prompt)   │
-                    └────────────┬────────────┘
-                                 │
-                 4. Admin Clicks Inline Button
-        [1h: 60m] [3h: 180m] [Unlimited: 0m] [Reject: deauth]
-                                 │
-                                 ▼
-                    ┌─────────────────────────┐
-                    │  Telegram Webhook       │
-                    │     api/webhook.js      │
-                    └────────────┬────────────┘
-                                 │ 5. RPUSH ndsctl command
+           ┌───────────────────────────────────────┐
+           │                                       │
+           ▼                                       ▼
+┌─────────────────────────┐             ┌─────────────────────────┐
+│  Telegram Bot API       │             │   Admin Web Console     │
+│  (Sends Admin Prompt)   │             │   /admin (public/admin) │
+└────────────┬────────────┘             └────────────┬────────────┘
+             │                                       │
+     4a. Admin Clicks Button                 4b. Web Admin Clicks Accept
+   [30m] [1h] [Unlimited] [Reject]         [30m] [1h] [3h] [Unlimited]
+             │                                       │
+             ▼                                       ▼
+┌─────────────────────────┐             ┌─────────────────────────┐
+│  Telegram Webhook       │             │   Admin API Handler     │
+│  api/webhook (telegram) │             │      api/admin.js       │
+└────────────┬────────────┘             └────────────┬────────────┘
+             │ 5a. RPUSH ndsctl command              │ 5b. RPUSH ndsctl command
+             └───────────────────┬───────────────────┘
                                  ▼
                     ┌─────────────────────────┐
                     │      Upstash Redis      │
@@ -52,7 +56,9 @@ A lightweight, production-ready serverless bridge deployed on **Vercel** to conn
                     │  OpenWrt Router Script  │
                     │     router/sync.sh      │
                     └────────────┬────────────┘
-                                 │ 7. Executes 'ndsctl auth <MAC> <MINUTES>'
+                                 │ 7. Executes:
+                                 │    - 'ndsctl auth <MAC> <MINUTES>' (30 / 60 / 0)
+                                 │    - 'ndsctl deauth <MAC>' (Instant Revoke)
                                  ▼
                     ┌─────────────────────────┐
                     │   Client Device State   │
@@ -66,10 +72,13 @@ A lightweight, production-ready serverless bridge deployed on **Vercel** to conn
 
 ```
 ├── api/
+│   ├── admin.js             # Admin endpoint (list requests, accept/reject, queue commands)
 │   ├── poll.js              # Router polling endpoint (secret-authenticated, pops from Redis)
 │   ├── request.js           # Client request endpoint (sends Telegram notification with buttons)
-│   └── webhook.js           # Telegram webhook receiver (processes buttons, pushes to Redis)
+│   ├── telegram.js          # Telegram webhook alias (forwards to webhook.js)
+│   └── webhook.js           # Telegram webhook receiver (processes buttons, queues ndsctl, updates buttons)
 ├── public/
+│   ├── admin.html           # Admin Web Console (live requests, direct accept, manual auth)
 │   └── index.html           # Standalone responsive captive portal landing page
 ├── router/
 │   ├── opennds_sync.init    # OpenWrt procd service init script (/etc/init.d/opennds_sync)
@@ -132,11 +141,27 @@ vercel
    - `UPSTASH_REDIS_REST_URL`
    - `UPSTASH_REDIS_REST_TOKEN`
    - `ROUTER_SECRET_KEY`
+   - `ADMIN_PASSWORD` *(optional; defaults to `ROUTER_SECRET_KEY` if not set)*
 4. Deploy the project. Note your deployment domain (e.g., `https://your-domain.vercel.app`).
 
 ---
 
-### 5. Register the Telegram Webhook
+### 5. Access the Web Admin Console (`/admin`)
+
+You can directly manage and authorize Wi-Fi access requests from your browser without opening Telegram!
+
+- **URL:** `https://<your-domain>.vercel.app/admin` (or `http://localhost:3000/admin` in local dev)
+- **Login Password:** Your configured `ADMIN_PASSWORD` (or `ROUTER_SECRET_KEY`).
+- **Features:**
+  - **Live Request Feed:** Real-time stream of incoming captive portal requests with user name, MAC address, IP, and status.
+  - **1-Click Direct Accept:** Accept pending users instantly with preset durations (**1 Hour**, **3 Hours**, **Unlimited**, or **Custom Minutes**).
+  - **1-Click Reject / Deauth:** Revoke access or reject requests with one click.
+  - **Manual Device Whitelist:** Directly authorize or deauthorize any MAC address without waiting for a captive portal form submission.
+  - **Auto-Sync:** Actions taken in the Web Console automatically log to Telegram to keep all admins informed.
+
+---
+
+### 6. Register the Telegram Webhook
 
 Point your Telegram bot to the deployed `/api/webhook` endpoint:
 ```bash

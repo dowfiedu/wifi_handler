@@ -9,6 +9,7 @@
  */
 
 import { Redis } from '@upstash/redis';
+import { escapeMarkdown } from './request.js';
 
 // Regular expression to validate standard MAC addresses
 const MAC_REGEX = /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i;
@@ -16,12 +17,11 @@ const MAC_REGEX = /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i;
 /**
  * Safely parses the callback_data string from Telegram.
  *
- * Formats:
- *  - "auth:<mac>:<duration>" -> e.g. "auth:aa:bb:cc:dd:ee:ff:60"
+ * Formats supported:
+ *  - "deauth_<mac>"          -> e.g. "deauth_aa:bb:cc:dd:ee:ff" (Terminate / Disconnect)
  *  - "deauth:<mac>"          -> e.g. "deauth:aa:bb:cc:dd:ee:ff"
- *
- * Note: MAC addresses contain colons, so naive split(':') will split the MAC into 6 parts.
- * We safely parse the prefix and suffix around the 6-byte MAC.
+ *  - "auth:<mac>:<duration>" -> e.g. "auth:aa:bb:cc:dd:ee:ff:30", "auth:aa:bb:cc:dd:ee:ff:60", "auth:aa:bb:cc:dd:ee:ff:0"
+ *  - "auth_<mac>_<duration>" -> e.g. "auth_aa:bb:cc:dd:ee:ff_60", "auth_aa:bb:cc:dd:ee:ff_0"
  *
  * @param {string} data - Raw callback_data string
  * @returns {{ action: string, mac: string, duration: number|null } | null}
@@ -29,18 +29,27 @@ const MAC_REGEX = /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i;
 export function parseCallbackData(data) {
   if (!data || typeof data !== 'string') return null;
 
-  const firstColon = data.indexOf(':');
-  if (firstColon === -1) return null;
+  const trimmed = data.trim();
 
-  const action = data.slice(0, firstColon).toLowerCase();
-  const rest = data.slice(firstColon + 1);
+  // 1. Deauth / Terminate action: e.g. "deauth_<mac>" or "deauth:<mac>"
+  if (trimmed.startsWith('deauth_') || trimmed.startsWith('deauth:')) {
+    const rawMac = trimmed.slice(7).trim();
+    const mac = rawMac.toLowerCase().replace(/-/g, ':');
+    if (MAC_REGEX.test(mac)) {
+      return { action: 'deauth', mac, duration: null };
+    }
+    return null;
+  }
 
-  if (action === 'auth') {
-    const lastColon = rest.lastIndexOf(':');
-    if (lastColon === -1) return null;
+  // 2. Auth action: e.g. "auth:<mac>:<duration>" or "auth_<mac>_<duration>"
+  if (trimmed.startsWith('auth:') || trimmed.startsWith('auth_')) {
+    const rest = trimmed.slice(5).trim();
+    const lastSep = Math.max(rest.lastIndexOf(':'), rest.lastIndexOf('_'));
+    if (lastSep === -1) return null;
 
-    const mac = rest.slice(0, lastColon).toLowerCase().replace(/-/g, ':');
-    const durationStr = rest.slice(lastColon + 1);
+    const rawMac = rest.slice(0, lastSep).trim();
+    const durationStr = rest.slice(lastSep + 1).trim();
+    const mac = rawMac.toLowerCase().replace(/-/g, ':');
     const duration = parseInt(durationStr, 10);
 
     if (isNaN(duration) || duration < 0 || !MAC_REGEX.test(mac)) {
@@ -48,15 +57,6 @@ export function parseCallbackData(data) {
     }
 
     return { action: 'auth', mac, duration };
-  }
-
-  if (action === 'deauth') {
-    const mac = rest.toLowerCase().replace(/-/g, ':');
-    if (!MAC_REGEX.test(mac)) {
-      return null;
-    }
-
-    return { action: 'deauth', mac, duration: null };
   }
 
   return null;
@@ -84,16 +84,24 @@ async function answerCallbackQuery(botToken, callbackQueryId, text, showAlert = 
 
 /**
  * Helper to update original Telegram message to reflect the chosen action.
+ * Attaches a "❌ Terminate" button when authorized so admins can instantly revoke access.
  */
-async function updateTelegramMessage(botToken, message, statusText) {
+async function updateTelegramMessage(botToken, message, statusText, inlineKeyboard = []) {
   if (!message || !message.chat || !message.message_id) return;
 
   try {
     const originalText = message.text || '';
-    const updatedText = `${originalText}\n\n${statusText}`;
+    // Strip the selection prompt if present
+    const cleanBaseText = originalText
+      .replace(/\n*Select access duration below to authorize via router:/g, '')
+      .trim();
+
+    // Escape Markdown special characters in the base text to prevent Telegram parser errors
+    const escapedBase = escapeMarkdown(cleanBaseText);
+    const updatedText = `${escapedBase}\n\n${statusText}`;
     const url = `https://api.telegram.org/bot${botToken}/editMessageText`;
 
-    await fetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -101,9 +109,14 @@ async function updateTelegramMessage(botToken, message, statusText) {
         message_id: message.message_id,
         text: updatedText,
         parse_mode: 'Markdown',
-        reply_markup: { inline_keyboard: [] } // Remove buttons once action is taken
+        reply_markup: { inline_keyboard: inlineKeyboard }
       })
     });
+
+    const data = await res.json().catch(() => null);
+    if (!res.ok || (data && !data.ok)) {
+      console.warn('[updateTelegramMessage Warning]', data?.description || res.statusText);
+    }
   } catch (err) {
     console.error('[updateTelegramMessage Failed]', err);
   }
@@ -167,17 +180,26 @@ export default async function handler(req, res) {
   let command = '';
   let ackMessage = '';
   let statusNotice = '';
+  let inlineKeyboard = [];
   const adminName = from?.first_name || 'Admin';
+  const safeAdminName = escapeMarkdown(adminName);
 
   if (action === 'auth') {
     command = `ndsctl auth ${mac} ${duration}`;
     const durationLabel = duration === 0 ? 'Unlimited' : `${duration}m`;
     ackMessage = `✅ Authorized ${mac} (${durationLabel})`;
-    statusNotice = `✅ *Status:* Authorized (${durationLabel}) by ${adminName}`;
+    statusNotice = `✅ *Status:* Authorized (${durationLabel}) by ${safeAdminName}`;
+    // Rule 3: Attach "❌ Terminate" button with callback_data "deauth_<MAC>"
+    inlineKeyboard = [
+      [
+        { text: '❌ Terminate', callback_data: `deauth_${mac}` }
+      ]
+    ];
   } else if (action === 'deauth') {
     command = `ndsctl deauth ${mac}`;
-    ackMessage = `❌ Deauthorized ${mac}`;
-    statusNotice = `❌ *Status:* Disconnected / Rejected by ${adminName}`;
+    ackMessage = `❌ Terminated ${mac}`;
+    statusNotice = `❌ *Status:* Terminated / Revoked by ${safeAdminName}`;
+    inlineKeyboard = []; // Rule 3: Remove buttons once terminated
   }
 
   try {
@@ -192,7 +214,7 @@ export default async function handler(req, res) {
 
     // Update the request status in the Redis database
     await redis.hset(`request:${mac}`, {
-      status: action === 'auth' ? 'authorized' : 'rejected',
+      status: action === 'auth' ? 'authorized' : 'terminated',
       duration: duration ?? 0,
       reviewedBy: adminName,
       reviewedAt: new Date().toISOString()
@@ -201,8 +223,8 @@ export default async function handler(req, res) {
     // Acknowledge the callback query to clear the Telegram client loading spinner
     await answerCallbackQuery(botToken, callbackQueryId, ackMessage, false);
 
-    // Update the message in Telegram to show final status and remove action buttons
-    await updateTelegramMessage(botToken, message, statusNotice);
+    // Update the message in Telegram to reflect status and update inline keyboard
+    await updateTelegramMessage(botToken, message, statusNotice, inlineKeyboard);
 
     return res.status(200).json({
       ok: true,
