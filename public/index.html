@@ -517,13 +517,48 @@
     }
 
     // -------------------------------------------------------------------------
-    // openNDS Parameter Extraction (Silent MAC handling)
+    // openNDS Parameter Extraction (FAS & Silent MAC handling)
     // -------------------------------------------------------------------------
+    function parseFasParam(token) {
+      if (!token) return { clientMac: null, clientIp: null, gatewayAddress: null, gatewayName: null };
+      try {
+        let cleaned = token.trim();
+        if (cleaned.includes('%')) {
+          try { cleaned = decodeURIComponent(cleaned); } catch(e) {}
+        }
+        const decoded = atob(cleaned);
+        const macMatch = decoded.match(/clientmac=([0-9a-fA-F:]{17})/i) ||
+          decoded.match(/clientmac=([0-9a-fA-F]{2}[:-][0-9a-fA-F]{2}[:-][0-9a-fA-F]{2}[:-][0-9a-fA-F]{2}[:-][0-9a-fA-F]{2}[:-][0-9a-fA-F]{2})/i);
+        const ipMatch = decoded.match(/clientip=([0-9.]+)/i);
+        const gwMatch = decoded.match(/gatewayaddress=([0-9.]+)/i);
+        const nameMatch = decoded.match(/gatewayname=([^,]+)/i);
+        return {
+          clientMac: macMatch ? macMatch[1].toLowerCase().replace(/-/g, ':') : null,
+          clientIp: ipMatch ? ipMatch[1] : null,
+          gatewayAddress: gwMatch ? gwMatch[1] : null,
+          gatewayName: nameMatch ? nameMatch[1].trim() : null,
+        };
+      } catch (err) {
+        console.warn('FAS token decode error:', err);
+        return { clientMac: null, clientIp: null, gatewayAddress: null, gatewayName: null };
+      }
+    }
+
     const params = new URLSearchParams(window.location.search);
+    const fasParam = params.get('fas') || '';
+    const fasData = parseFasParam(fasParam);
+
     const rawMac = params.get('clientmac') || params.get('mac') || params.get('client_mac') || '';
     const rawIp = params.get('clientip') || params.get('ip') || params.get('client_ip') || '';
 
+    const resolvedMac = fasData.clientMac || rawMac;
+    const resolvedIp = fasData.clientIp || rawIp;
+
     const networkName = document.getElementById('networkName');
+    if (fasData.gatewayName && networkName) {
+      networkName.textContent = fasData.gatewayName;
+    }
+
     const clientMacInput = document.getElementById('clientMac');
     const accessForm = document.getElementById('accessForm');
     const submitBtn = document.getElementById('submitBtn');
@@ -537,8 +572,8 @@
 
     // Helper: Generate or retrieve a persistent mock MAC for local testing when no openNDS query param exists
     function getOrCreateClientMac() {
-      if (rawMac && rawMac.trim()) {
-        return rawMac.trim().toLowerCase();
+      if (resolvedMac && resolvedMac.trim()) {
+        return resolvedMac.trim().toLowerCase();
       }
       let storedMac = localStorage.getItem('opennds_client_mac');
       if (!storedMac) {
@@ -586,16 +621,28 @@
         const payload = {
           name: name,
           mac: clientMacAddress,
-          ip: rawIp || undefined
+          ip: resolvedIp || undefined,
+          fas: fasParam || undefined
         };
 
-        const res = await fetch('/api/request', {
+        // Send to /api/login (or fallback to /api/request)
+        let res = await fetch('/api/login', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify(payload)
         });
+
+        if (!res.ok && res.status !== 400) {
+          res = await fetch('/api/request', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(payload)
+          });
+        }
 
         const data = await res.json();
 

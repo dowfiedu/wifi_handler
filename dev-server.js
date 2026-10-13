@@ -19,6 +19,10 @@ import requestHandler from './api/request.js';
 import webhookHandler, { parseCallbackData } from './api/webhook.js';
 import pollHandler from './api/poll.js';
 import adminHandler from './api/admin.js';
+import loginHandler from './api/login.js';
+import pendingAuthHandler from './api/pending-auth.js';
+import confirmAuthHandler from './api/confirm-auth.js';
+import { parseFasToken } from './lib/opennds.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -83,6 +87,7 @@ async function parseBody(req) {
 
 // In-memory queue and requests list used for local dev simulation if Upstash Redis credentials are not configured
 const localDevQueue = [];
+const localDevPendingMacs = ['4a:8b:9c:1d:2e:3f', '6c:7d:8e:9f:0a:1b'];
 const localDevRequests = [
   {
     name: 'রহিম আহমেদ (Rahim)',
@@ -118,6 +123,115 @@ const server = http.createServer(async (req, res) => {
   }
 
   // --- API Routing ---
+  if (pathname === '/api/login') {
+    req.body = await parseBody(req);
+    if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
+      return loginHandler(req, res);
+    }
+
+    const { fas, name, mac, ip } = req.body || {};
+    let clientMac = mac;
+    let clientIp = ip;
+    if (fas && typeof fas === 'string') {
+      const parsed = parseFasToken(fas);
+      if (parsed.clientMac) clientMac = parsed.clientMac;
+      if (parsed.clientIp) clientIp = parsed.clientIp;
+    }
+
+    if (!clientMac) {
+      return res.status(400).json({ error: 'Valid client MAC not found' });
+    }
+
+    const cleanMac = clientMac.trim().toLowerCase();
+    const cleanName = name?.trim() || 'Guest User';
+
+    const existingIdx = localDevPendingMacs.indexOf(cleanMac);
+    if (existingIdx !== -1) localDevPendingMacs.splice(existingIdx, 1);
+    localDevPendingMacs.push(cleanMac);
+
+    const existingReq = localDevRequests.find(r => r.mac === cleanMac);
+    if (existingReq) {
+      existingReq.status = 'PENDING';
+      existingReq.name = cleanName;
+      existingReq.ip = clientIp || existingReq.ip;
+      existingReq.requestedAt = new Date().toISOString();
+    } else {
+      localDevRequests.unshift({
+        name: cleanName,
+        mac: cleanMac,
+        ip: clientIp || '',
+        status: 'PENDING',
+        requestedAt: new Date().toISOString()
+      });
+    }
+
+    console.log(`\n--- 🔑 [LOCAL DEV: FAS LOGIN] ---`);
+    console.log(`MAC:         ${cleanMac}`);
+    console.log(`IP:          ${clientIp || '(none)'}`);
+    console.log(`Status:      PENDING`);
+    console.log(`Queue Size:  ${localDevPendingMacs.length}`);
+    console.log(`---------------------------------\n`);
+
+    return res.status(200).json({ success: true, mac: cleanMac, ip: clientIp, simulated: true });
+  }
+
+  if (pathname === '/api/pending-auth') {
+    if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
+      return pendingAuthHandler(req, res);
+    }
+
+    const pendingMac = localDevPendingMacs[0] || null;
+    const accept = req.headers['accept'] || '';
+    if (accept.includes('application/json') || parsedUrl.searchParams.get('format') === 'json') {
+      return res.status(200).json({ mac: pendingMac, simulated: true });
+    }
+
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    return res.status(200).end(pendingMac || '');
+  }
+
+  if (pathname === '/api/confirm-auth') {
+    req.body = await parseBody(req);
+    if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
+      return confirmAuthHandler(req, res);
+    }
+
+    let targetMac = null;
+    if (typeof req.body === 'string') {
+      const params = new URLSearchParams(req.body);
+      targetMac = params.get('mac') || req.body.trim();
+    } else if (req.body && typeof req.body === 'object') {
+      targetMac = req.body.mac;
+    }
+    if (!targetMac) {
+      targetMac = parsedUrl.searchParams.get('mac');
+    }
+
+    if (!targetMac) {
+      return res.status(400).json({ error: 'Field "mac" is required and must be a valid MAC address.' });
+    }
+
+    const cleanMac = targetMac.trim().toLowerCase();
+    const idx = localDevPendingMacs.indexOf(cleanMac);
+    if (idx !== -1) {
+      localDevPendingMacs.splice(idx, 1);
+    }
+
+    const reqRecord = localDevRequests.find(r => r.mac === cleanMac);
+    if (reqRecord) {
+      reqRecord.status = 'AUTHENTICATED';
+      reqRecord.authenticatedAt = new Date().toISOString();
+    }
+
+    console.log(`\n--- ✅ [LOCAL DEV: AUTH CONFIRMED] ---`);
+    console.log(`MAC:         ${cleanMac}`);
+    console.log(`Status:      AUTHENTICATED`);
+    console.log(`Remaining:   ${localDevPendingMacs.length}`);
+    console.log(`--------------------------------------\n`);
+
+    return res.status(200).json({ success: true, mac: cleanMac, status: 'AUTHENTICATED', simulated: true });
+  }
+
   if (pathname === '/api/request') {
     req.body = await parseBody(req);
 

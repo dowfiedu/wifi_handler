@@ -73,17 +73,23 @@ A lightweight, production-ready serverless bridge deployed on **Vercel** to conn
 ```
 ├── api/
 │   ├── admin.js             # Admin endpoint (list requests, accept/reject, queue commands)
+│   ├── confirm-auth.js      # Router auth confirmation endpoint (marks MAC as AUTHENTICATED)
+│   ├── login.js             # FAS client login endpoint (decodes FAS, saves PENDING in Redis)
+│   ├── pending-auth.js      # Router polling endpoint (returns pending MAC as text or JSON)
 │   ├── poll.js              # Router polling endpoint (secret-authenticated, pops from Redis)
 │   ├── request.js           # Client request endpoint (sends Telegram notification with buttons)
 │   ├── telegram.js          # Telegram webhook alias (forwards to webhook.js)
 │   └── webhook.js           # Telegram webhook receiver (processes buttons, queues ndsctl, updates buttons)
+├── lib/
+│   ├── opennds.js           # FAS helper function (decodes base64 ?fas= token to MAC/IP)
+│   └── opennds.ts           # TypeScript interfaces and helper for FAS token decoding
 ├── public/
 │   ├── admin.html           # Admin Web Console (live requests, direct accept, manual auth)
-│   └── index.html           # Standalone responsive captive portal landing page
+│   └── index.html           # Standalone responsive captive portal landing page (FAS-aware)
 ├── router/
 │   ├── opennds_sync.init    # OpenWrt procd service init script (/etc/init.d/opennds_sync)
 │   ├── sync.conf.example    # Configuration file template for OpenWrt (/etc/opennds/sync.conf)
-│   └── sync.sh              # POSIX /bin/sh polling daemon for OpenWrt
+│   └── sync.sh              # POSIX /bin/sh polling daemon for OpenWrt (supports poll & pending-auth)
 ├── test/
 │   ├── endpoints.test.js    # Node.js tests for HTTP endpoints and status codes
 │   ├── test_router_sync.sh  # POSIX shell tests for router script security filter & JSON parsing
@@ -245,6 +251,26 @@ Check router system logs:
 ```sh
 logread -e opennds-sync
 ```
+
+---
+
+### 5. openNDS Level 1 FAS Auto-Auth Flow
+
+If your openNDS router is configured for FAS Level 1 (`fasport`, `fasremoteurl`):
+1. **Client redirection**: openNDS redirects client browser to `https://<your-app>.vercel.app/?fas=<base64>`.
+2. **FAS decode & login**: The landing page decodes `fas` into `clientmac` and `clientip`, submitting to `/api/login` which marks the device as `PENDING` in Upstash Redis and adds it to `pending_macs`.
+3. **Router polling**: The router polls `/api/pending-auth`:
+   ```bash
+   PENDING_MAC=$(curl -s https://<your-app>.vercel.app/api/pending-auth)
+   ```
+4. **Router authorization & confirmation**:
+   ```bash
+   if [ -n "$PENDING_MAC" ] && [ "$PENDING_MAC" != "null" ]; then
+       ndsctl auth "$PENDING_MAC" 0
+       curl -s -X POST -d "mac=$PENDING_MAC" https://<your-app>.vercel.app/api/confirm-auth
+   fi
+   ```
+   *(Both plain text and JSON responses with `{ "mac": "..." }` are supported).*
 
 ---
 

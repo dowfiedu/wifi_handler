@@ -8,6 +8,7 @@
  */
 
 import { Redis } from '@upstash/redis';
+import { parseFasToken } from '../lib/opennds.js';
 
 // Regular expression to validate standard MAC addresses (colon or hyphen separated)
 const MAC_REGEX = /^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/;
@@ -54,7 +55,16 @@ export default async function handler(req, res) {
     }
   }
 
-  const { name, mac, ip } = body || {};
+  const { name, mac, ip, fas } = body || {};
+
+  // Extract from FAS token if provided
+  let candidateMac = mac;
+  let candidateIp = ip;
+  if (fas && typeof fas === 'string') {
+    const parsedFas = parseFasToken(fas);
+    if (parsedFas.clientMac) candidateMac = parsedFas.clientMac;
+    if (parsedFas.clientIp) candidateIp = parsedFas.clientIp;
+  }
 
   // Validate Name input
   if (!name || typeof name !== 'string' || name.trim().length === 0) {
@@ -63,12 +73,12 @@ export default async function handler(req, res) {
   const cleanName = name.trim().slice(0, 64);
 
   // Validate MAC input
-  if (!mac || typeof mac !== 'string' || !MAC_REGEX.test(mac.trim())) {
+  if (!candidateMac || typeof candidateMac !== 'string' || !MAC_REGEX.test(candidateMac.trim())) {
     return res.status(400).json({
       error: 'Field "mac" is required and must be a valid MAC address (e.g. AA:BB:CC:DD:EE:FF).'
     });
   }
-  const cleanMac = normalizeMac(mac);
+  const cleanMac = normalizeMac(candidateMac);
 
   // Validate environment variables
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
@@ -84,7 +94,7 @@ export default async function handler(req, res) {
   }
 
   // Sanitize IP if provided
-  const cleanIp = ip && typeof ip === 'string' ? ip.trim().slice(0, 45) : null;
+  const cleanIp = candidateIp && typeof candidateIp === 'string' ? candidateIp.trim().slice(0, 45) : null;
   const nowIso = new Date().toISOString();
 
   // ---------------------------------------------------------------------------
@@ -102,16 +112,21 @@ export default async function handler(req, res) {
         name: cleanName,
         mac: cleanMac,
         ip: cleanIp || '',
-        status: 'pending',
-        requestedAt: nowIso
+        status: 'PENDING',
+        requestedAt: nowIso,
+        updatedAt: nowIso
       });
+
+      // Maintain FIFO queue of pending MACs for router sync (/api/pending-auth)
+      await redis.lrem('pending_macs', 0, cleanMac);
+      await redis.rpush('pending_macs', cleanMac);
 
       // Append request to chronological history list (stores last 500 requests)
       await redis.lpush('request_history', JSON.stringify({
         name: cleanName,
         mac: cleanMac,
         ip: cleanIp || '',
-        status: 'pending',
+        status: 'PENDING',
         requestedAt: nowIso
       }));
       await redis.ltrim('request_history', 0, 499);

@@ -6,6 +6,9 @@ import webhookHandler from '../api/webhook.js';
 import telegramHandler from '../api/telegram.js';
 import pollHandler from '../api/poll.js';
 import adminHandler from '../api/admin.js';
+import loginHandler from '../api/login.js';
+import pendingAuthHandler from '../api/pending-auth.js';
+import confirmAuthHandler from '../api/confirm-auth.js';
 
 // Helper mock response factory
 function createMockRes() {
@@ -22,6 +25,14 @@ function createMockRes() {
       return this;
     },
     json(data) {
+      this.body = data;
+      return this;
+    },
+    send(data) {
+      this.body = data;
+      return this;
+    },
+    end(data) {
       this.body = data;
       return this;
     }
@@ -356,5 +367,167 @@ describe('API Endpoints Validation & Status Codes', () => {
 
     assert.equal(res.statusCode, 400);
     assert.match(res.body.error, /duration/);
+  });
+
+  // ---------------------------------------------------------------------------
+  // /api/login tests
+  // ---------------------------------------------------------------------------
+  test('/api/login rejects non-POST requests with 405', async () => {
+    const req = { method: 'GET' };
+    const res = createMockRes();
+
+    await loginHandler(req, res);
+
+    assert.equal(res.statusCode, 405);
+    assert.match(res.body.error, /Method GET Not Allowed/);
+  });
+
+  test('/api/login rejects request when no valid MAC is found', async () => {
+    const req = {
+      method: 'POST',
+      body: { name: 'Test User' }
+    };
+    const res = createMockRes();
+
+    await loginHandler(req, res);
+
+    assert.equal(res.statusCode, 400);
+    assert.match(res.body.error, /Valid client MAC not found/);
+  });
+
+  test('/api/login successfully decodes FAS token and returns 200', async () => {
+    const rawFas = 'clientmac=b6:30:f7:f7:11:60, clientip=192.168.2.223, gatewayaddress=192.168.2.1';
+    const fasToken = Buffer.from(rawFas).toString('base64');
+
+    const req = {
+      method: 'POST',
+      body: { fas: fasToken, name: 'Guest User' }
+    };
+    const res = createMockRes();
+
+    await loginHandler(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.success, true);
+    assert.equal(res.body.mac, 'b6:30:f7:f7:11:60');
+    assert.equal(res.body.ip, '192.168.2.223');
+  });
+
+  test('/api/login accepts direct mac parameter when fas is omitted', async () => {
+    const req = {
+      method: 'POST',
+      body: { mac: 'AA:BB:CC:DD:EE:FF', ip: '10.0.0.5', name: 'Direct User' }
+    };
+    const res = createMockRes();
+
+    await loginHandler(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.success, true);
+    assert.equal(res.body.mac, 'aa:bb:cc:dd:ee:ff');
+  });
+
+  // ---------------------------------------------------------------------------
+  // /api/pending-auth tests
+  // ---------------------------------------------------------------------------
+  test('/api/pending-auth rejects non-GET requests with 405', async () => {
+    const req = { method: 'POST', headers: {} };
+    const res = createMockRes();
+
+    await pendingAuthHandler(req, res);
+
+    assert.equal(res.statusCode, 405);
+    assert.match(res.body.error, /Method POST Not Allowed/);
+  });
+
+  test('/api/pending-auth rejects invalid x-router-secret with 401 when configured', async () => {
+    process.env.ROUTER_SECRET_KEY = 'secret-key-xyz';
+    const req = {
+      method: 'GET',
+      headers: { 'x-router-secret': 'wrong-secret' }
+    };
+    const res = createMockRes();
+
+    await pendingAuthHandler(req, res);
+
+    assert.equal(res.statusCode, 401);
+    assert.match(res.body.error, /Unauthorized/);
+  });
+
+  test('/api/pending-auth returns plain text by default', async () => {
+    const req = { method: 'GET', headers: {} };
+    const res = createMockRes();
+
+    await pendingAuthHandler(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.match(res.headers['content-type'], /text\/plain/);
+  });
+
+  test('/api/pending-auth returns JSON when requested', async () => {
+    const req = {
+      method: 'GET',
+      headers: { accept: 'application/json' }
+    };
+    const res = createMockRes();
+
+    await pendingAuthHandler(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.ok('mac' in res.body);
+  });
+
+  // ---------------------------------------------------------------------------
+  // /api/confirm-auth tests
+  // ---------------------------------------------------------------------------
+  test('/api/confirm-auth rejects non-POST requests with 405', async () => {
+    const req = { method: 'GET', headers: {} };
+    const res = createMockRes();
+
+    await confirmAuthHandler(req, res);
+
+    assert.equal(res.statusCode, 405);
+    assert.match(res.body.error, /Method GET Not Allowed/);
+  });
+
+  test('/api/confirm-auth rejects missing MAC with 400', async () => {
+    const req = { method: 'POST', headers: {}, body: {} };
+    const res = createMockRes();
+
+    await confirmAuthHandler(req, res);
+
+    assert.equal(res.statusCode, 400);
+    assert.match(res.body.error, /valid MAC address/);
+  });
+
+  test('/api/confirm-auth confirms MAC via URLSearchParams string body', async () => {
+    const req = {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'mac=b6:30:f7:f7:11:60'
+    };
+    const res = createMockRes();
+
+    await confirmAuthHandler(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.success, true);
+    assert.equal(res.body.mac, 'b6:30:f7:f7:11:60');
+    assert.equal(res.body.status, 'AUTHENTICATED');
+  });
+
+  test('/api/confirm-auth confirms MAC via JSON body', async () => {
+    const req = {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: { mac: '00:11:22:33:44:55' }
+    };
+    const res = createMockRes();
+
+    await confirmAuthHandler(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.success, true);
+    assert.equal(res.body.mac, '00:11:22:33:44:55');
   });
 });

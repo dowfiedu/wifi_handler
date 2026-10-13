@@ -76,6 +76,31 @@ parse_command() {
 }
 
 # ------------------------------------------------------------------------------
+# 4b. Pending MAC Parser Helper
+# Extracts MAC address from plain text response or JSON { "mac": "..." }.
+# ------------------------------------------------------------------------------
+parse_mac() {
+    _raw="$1"
+
+    # Direct plain text MAC check
+    case "$_raw" in
+        [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F])
+            printf '%s' "$_raw"
+            return 0
+            ;;
+    esac
+
+    # JSON extraction: { "mac": "..." }
+    if command -v jsonfilter >/dev/null 2>&1; then
+        printf '%s' "$_raw" | jsonfilter -e '@.mac'
+    elif command -v jq >/dev/null 2>&1; then
+        printf '%s' "$_raw" | jq -r '.mac // empty'
+    else
+        printf '%s' "$_raw" | sed -n 's/.*"mac"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+    fi
+}
+
+# ------------------------------------------------------------------------------
 # 5. Security & Validation Filter
 # Ensures commands strictly match allowed openNDS syntax before execution:
 #  - ndsctl auth <MAC> <minutes>
@@ -117,14 +142,14 @@ while true; do
     # Perform HTTP GET poll with timeout and secret authentication header
     response=$(curl -s -f -m 10 \
         -H "x-router-secret: $ROUTER_SECRET_KEY" \
-        -H "Accept: application/json" \
+        -H "Accept: application/json, text/plain" \
         "$API_URL" 2>/dev/null)
     curl_exit=$?
 
     if [ $curl_exit -ne 0 ]; then
         log_warn "Poll request failed (curl exit code: $curl_exit). Check network, URL, or x-router-secret."
     elif [ -n "$response" ]; then
-        # Parse command from response JSON
+        # 1. Check for command format from /api/poll
         target_cmd=$(parse_command "$response")
 
         if [ -n "$target_cmd" ] && [ "$target_cmd" != "null" ]; then
@@ -145,6 +170,31 @@ while true; do
                 fi
             else
                 log_error "SECURITY ALERT: Rejected unauthorized or malformed command: '$target_cmd'"
+            fi
+        else
+            # 2. Check for direct MAC format from /api/pending-auth
+            target_mac=$(parse_mac "$response")
+
+            if [ -n "$target_mac" ] && [ "$target_mac" != "null" ]; then
+                log_info "Received pending client MAC: $target_mac"
+                auth_cmd="ndsctl auth $target_mac ${DEFAULT_AUTH_DURATION:-0}"
+
+                if command -v ndsctl >/dev/null 2>&1; then
+                    exec_output=$($auth_cmd 2>&1)
+                    log_info "Authorized client: '$target_mac' [Output: $exec_output]"
+                else
+                    log_info "[DRY-RUN] Simulating authentication: $auth_cmd"
+                fi
+
+                # Confirm authentication back to server
+                confirm_url="${CONFIRM_URL:-$(printf '%s' "$API_URL" | sed 's/pending-auth/confirm-auth/')}"
+                if [ "$confirm_url" != "$API_URL" ] || [ -n "$CONFIRM_URL" ]; then
+                    curl -s -m 5 -X POST \
+                        -H "x-router-secret: $ROUTER_SECRET_KEY" \
+                        -d "mac=$target_mac" \
+                        "$confirm_url" >/dev/null 2>&1
+                    log_info "Confirmed authorization for MAC: $target_mac"
+                fi
             fi
         fi
     fi

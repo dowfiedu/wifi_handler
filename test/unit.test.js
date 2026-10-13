@@ -6,6 +6,7 @@ import { parseCallbackData } from '../api/webhook.js';
 import { parseCallbackData as parseCallbackDataTelegram } from '../api/telegram.js';
 import { timingSafeCompare } from '../api/poll.js';
 import { checkAdminAuth } from '../api/admin.js';
+import { parseFasToken } from '../lib/opennds.js';
 
 describe('api/request.js Helpers', () => {
   test('escapeMarkdown escapes Markdown special characters', () => {
@@ -137,3 +138,44 @@ describe('api/admin.js Security & Authentication', () => {
     assert.equal(checkAdminAuth({ headers: {} }, ''), false);
   });
 });
+
+describe('lib/opennds.js FAS Token Parsing', () => {
+  test('parses standard base64 FAS token with MAC, IP, and gateway correctly', () => {
+    const rawPayload = 'clientmac=b6:30:f7:f7:11:60, clientip=192.168.2.223, gatewayaddress=192.168.2.1:2050, gatewayname=openNDS-Home';
+    const base64Token = Buffer.from(rawPayload).toString('base64');
+
+    const result = parseFasToken(base64Token);
+    assert.equal(result.clientMac, 'b6:30:f7:f7:11:60');
+    assert.equal(result.clientIp, '192.168.2.223');
+    assert.equal(result.gatewayAddress, '192.168.2.1');
+  });
+
+  test('normalizes uppercase MAC and hyphenated MAC to lowercase colon format', () => {
+    const rawPayload = 'clientmac=AA-BB-CC-DD-EE-FF, clientip=10.0.0.15';
+    const base64Token = Buffer.from(rawPayload).toString('base64');
+
+    const result = parseFasToken(base64Token);
+    assert.equal(result.clientMac, 'aa:bb:cc:dd:ee:ff');
+    assert.equal(result.clientIp, '10.0.0.15');
+    assert.equal(result.gatewayAddress, null);
+  });
+
+  test('decodes URL-encoded base64 FAS token properly', () => {
+    const rawPayload = 'clientmac=00:11:22:33:44:55, clientip=192.168.1.50, gatewayaddress=192.168.1.1';
+    const base64Token = Buffer.from(rawPayload).toString('base64');
+    const urlEncoded = encodeURIComponent(base64Token);
+
+    const result = parseFasToken(urlEncoded);
+    assert.equal(result.clientMac, '00:11:22:33:44:55');
+    assert.equal(result.clientIp, '192.168.1.50');
+    assert.equal(result.gatewayAddress, '192.168.1.1');
+  });
+
+  test('safely handles empty, invalid, or non-base64 input', () => {
+    assert.deepEqual(parseFasToken(''), { clientMac: null, clientIp: null, gatewayAddress: null });
+    assert.deepEqual(parseFasToken(null), { clientMac: null, clientIp: null, gatewayAddress: null });
+    assert.deepEqual(parseFasToken(undefined), { clientMac: null, clientIp: null, gatewayAddress: null });
+    assert.deepEqual(parseFasToken('not_valid_base64_data_!!!'), { clientMac: null, clientIp: null, gatewayAddress: null });
+  });
+});
+
