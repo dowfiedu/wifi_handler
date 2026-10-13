@@ -117,6 +117,12 @@ is_command_safe() {
         ndsctl\ deauth\ [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F])
             return 0
             ;;
+        ndsctl\ trust\ [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F])
+            return 0
+            ;;
+        ndsctl\ untrust\ [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F])
+            return 0
+            ;;
         *)
             return 1
             ;;
@@ -168,6 +174,21 @@ while true; do
                 else
                     log_info "[DRY-RUN] Simulating command execution: $target_cmd"
                 fi
+
+                # Confirm auth command execution back to server
+                case "$target_cmd" in
+                    ndsctl\ auth\ *)
+                        _auth_mac=$(printf '%s' "$target_cmd" | awk '{print $3}')
+                        if [ -n "$_auth_mac" ]; then
+                            confirm_url="${CONFIRM_URL:-$(printf '%s' "$API_URL" | sed 's/poll/confirm-auth/')}"
+                            curl -s -m 5 -X POST \
+                                -H "x-router-secret: $ROUTER_SECRET_KEY" \
+                                -d "mac=$_auth_mac" \
+                                "$confirm_url" >/dev/null 2>&1
+                            log_info "Confirmed authorization with server for MAC: $_auth_mac"
+                        fi
+                        ;;
+                esac
             else
                 log_error "SECURITY ALERT: Rejected unauthorized or malformed command: '$target_cmd'"
             fi

@@ -63,18 +63,13 @@ export default async function handler(req, res) {
     }
   }
 
-  // Testing fallback: If no pending client is currently in Redis, return the dummy MAC
-  // 'b6:30:f7:f7:11:60' so that browser checks and router uclient-fetch tests succeed immediately.
-  const DUMMY_TEST_MAC = 'b6:30:f7:f7:11:60';
-  const targetMac = pendingMac || DUMMY_TEST_MAC;
-
   // Check if caller requests JSON format
   const acceptHeader = req.headers['accept'] || '';
   const isJson = acceptHeader.includes('application/json') || (req.url && req.url.includes('format=json'));
 
   if (isJson) {
     return res.status(200).json({
-      mac: targetMac
+      mac: pendingMac || null
     });
   }
 
@@ -82,7 +77,7 @@ export default async function handler(req, res) {
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
   res.statusCode = 200;
   if (typeof res.send === 'function') {
-    return res.send(targetMac);
+    return res.send(pendingMac || '');
   }
-  return res.end(targetMac);
+  return res.end(pendingMac || '');
 }

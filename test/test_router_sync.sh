@@ -61,6 +61,16 @@ if ! is_command_safe "ndsctl deauth 00:11:22:33:44:55"; then
     exit 1
 fi
 
+if ! is_command_safe "ndsctl trust 00:11:22:33:44:55"; then
+    echo "FAIL: Should allow 'ndsctl trust 00:11:22:33:44:55'"
+    exit 1
+fi
+
+if ! is_command_safe "ndsctl untrust 00:11:22:33:44:55"; then
+    echo "FAIL: Should allow 'ndsctl untrust 00:11:22:33:44:55'"
+    exit 1
+fi
+
 # Disallowed / malicious commands
 if is_command_safe "rm -rf /"; then
     echo "FAIL: Should reject malicious command 'rm -rf /'"
