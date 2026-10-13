@@ -16,7 +16,10 @@
       --text-muted: #94a3b8;
       --success: #10b981;
       --success-glow: rgba(16, 185, 129, 0.25);
+      --warning: #f59e0b;
+      --warning-glow: rgba(245, 158, 11, 0.28);
       --error: #ef4444;
+      --error-glow: rgba(239, 68, 68, 0.25);
       --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     }
 
@@ -35,7 +38,7 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      padding: 1.25rem;
+      padding: 1rem;
       position: relative;
       overflow-x: hidden;
     }
@@ -43,15 +46,28 @@
     /* Ambient background glows */
     .glow-sphere {
       position: absolute;
-      width: 340px;
-      height: 340px;
+      width: 360px;
+      height: 360px;
       border-radius: 50%;
-      background: radial-gradient(circle, rgba(56, 189, 248, 0.16) 0%, rgba(56, 189, 248, 0) 70%);
+      background: radial-gradient(circle, rgba(56, 189, 248, 0.18) 0%, rgba(56, 189, 248, 0) 70%);
       top: 10%;
       left: 50%;
       transform: translateX(-50%);
       pointer-events: none;
       z-index: 0;
+      transition: background 0.6s ease;
+    }
+
+    .glow-sphere.waiting-glow {
+      background: radial-gradient(circle, rgba(245, 158, 11, 0.22) 0%, rgba(245, 158, 11, 0) 70%);
+    }
+
+    .glow-sphere.success-glow {
+      background: radial-gradient(circle, rgba(16, 185, 129, 0.24) 0%, rgba(16, 185, 129, 0) 70%);
+    }
+
+    .glow-sphere.rejected-glow {
+      background: radial-gradient(circle, rgba(239, 68, 68, 0.22) 0%, rgba(239, 68, 68, 0) 70%);
     }
 
     .container {
@@ -67,17 +83,37 @@
       -webkit-backdrop-filter: blur(20px);
       border: 1px solid var(--card-border);
       border-radius: 24px;
-      padding: 2.25rem 1.85rem;
+      padding: 2rem 1.65rem;
       box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.65);
-      transition: all 0.3s ease;
+      transition: border-color 0.4s ease, box-shadow 0.4s ease, transform 0.3s ease;
+      width: 100%;
+      overflow: hidden;
+      word-break: break-word;
     }
 
-    /* Top bar inside card: Network info & Language toggle */
+    .card.waiting-mode {
+      border-color: rgba(245, 158, 11, 0.35);
+      box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.7), 0 0 35px rgba(245, 158, 11, 0.14);
+    }
+
+    .card.success-mode {
+      border-color: rgba(16, 185, 129, 0.4);
+      box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.7), 0 0 35px rgba(16, 185, 129, 0.16);
+    }
+
+    .card.rejected-mode {
+      border-color: rgba(239, 68, 68, 0.35);
+      box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.7), 0 0 35px rgba(239, 68, 68, 0.14);
+    }
+
+    /* Top bar inside card: Wi-Fi Badge & Language toggle */
     .card-top-bar {
       display: flex;
       justify-content: space-between;
       align-items: center;
+      gap: 0.75rem;
       margin-bottom: 1.5rem;
+      width: 100%;
     }
 
     .network-badge {
@@ -86,51 +122,82 @@
       gap: 0.45rem;
       background: rgba(255, 255, 255, 0.06);
       border: 1px solid rgba(255, 255, 255, 0.1);
-      border-radius: 20px;
+      border-radius: 9999px;
       padding: 0.35rem 0.8rem;
       font-size: 0.75rem;
       color: var(--text-muted);
+      min-width: 0;
+      flex-shrink: 1;
     }
 
     .network-badge svg {
       width: 14px;
       height: 14px;
       color: var(--accent);
+      flex-shrink: 0;
+      transition: color 0.3s;
+    }
+
+    .card.waiting-mode .network-badge svg {
+      color: var(--warning);
+    }
+
+    .card.success-mode .network-badge svg {
+      color: var(--success);
     }
 
     .network-name {
       color: var(--text-main);
       font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .lang-toggle {
-      display: flex;
-      background: rgba(15, 23, 42, 0.8);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      border-radius: 14px;
+      display: inline-flex;
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 12px;
       padding: 2px;
       font-size: 0.75rem;
+      flex-shrink: 0;
     }
 
     .lang-btn {
       background: transparent;
       border: none;
       color: var(--text-muted);
-      padding: 4px 8px;
-      border-radius: 10px;
+      padding: 4px 10px;
+      border-radius: 9px;
       cursor: pointer;
       font-weight: 600;
-      transition: all 0.2s;
+      font-size: 0.75rem;
+      transition: all 0.2s ease;
+      user-select: none;
     }
 
     .lang-btn.active {
       background: var(--accent);
       color: #0f172a;
+      box-shadow: 0 2px 8px rgba(56, 189, 248, 0.35);
+    }
+
+    .card.waiting-mode .lang-btn.active {
+      background: var(--warning);
+      color: #0f172a;
+      box-shadow: 0 2px 8px rgba(245, 158, 11, 0.35);
+    }
+
+    .card.success-mode .lang-btn.active {
+      background: var(--success);
+      color: #0f172a;
+      box-shadow: 0 2px 8px rgba(16, 185, 129, 0.35);
     }
 
     .header {
       text-align: center;
-      margin-bottom: 2rem;
+      margin-bottom: 1.75rem;
     }
 
     .icon-wrapper {
@@ -145,6 +212,7 @@
       color: var(--accent);
       border: 1px solid rgba(56, 189, 248, 0.25);
       box-shadow: 0 0 24px var(--accent-glow);
+      transition: all 0.4s ease;
     }
 
     .icon-wrapper svg {
@@ -153,10 +221,11 @@
     }
 
     h1 {
-      font-size: 1.55rem;
+      font-size: 1.5rem;
       font-weight: 700;
       letter-spacing: -0.025em;
       margin-bottom: 0.5rem;
+      line-height: 1.3;
     }
 
     p.subtitle {
@@ -216,6 +285,7 @@
       transition: all 0.2s ease;
       box-shadow: 0 4px 14px rgba(56, 189, 248, 0.3);
       margin-top: 0.5rem;
+      text-decoration: none;
     }
 
     .btn:hover:not(:disabled) {
@@ -233,6 +303,30 @@
       opacity: 0.6;
       cursor: not-allowed;
       transform: none;
+    }
+
+    .btn-success {
+      background: var(--success);
+      color: #0f172a;
+      box-shadow: 0 4px 14px var(--success-glow);
+    }
+
+    .btn-success:hover {
+      background: #059669;
+      color: #ffffff;
+      box-shadow: 0 6px 20px rgba(16, 185, 129, 0.4);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-main);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      box-shadow: none;
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.14);
+      color: #ffffff;
     }
 
     .spinner {
@@ -264,42 +358,285 @@
       color: #fca5a5;
     }
 
-    /* Confirmation State */
-    .confirmation-view {
-      display: none;
-      text-align: center;
-      animation: fadeIn 0.35s ease;
+    /* ------------------------------------------------------------- */
+    /* VIEW TRANSITIONS */
+    /* ------------------------------------------------------------- */
+    .view-container {
+      animation: viewFadeIn 0.35s ease;
     }
 
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(6px); }
+    @keyframes viewFadeIn {
+      from { opacity: 0; transform: translateY(8px); }
       to { opacity: 1; transform: translateY(0); }
     }
 
-    .status-badge {
+    /* ------------------------------------------------------------- */
+    /* REDESIGNED WAITING PAGE (Amber Radiant Theme & Light Animations) */
+    /* ------------------------------------------------------------- */
+    .waiting-view {
+      display: none;
+      text-align: center;
+    }
+
+    /* Radar Beacon Animation Container */
+    .radar-beacon-container {
+      position: relative;
+      width: 100px;
+      height: 100px;
+      margin: 0.5rem auto 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .radar-wave {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      border: 1.5px solid rgba(245, 158, 11, 0.45);
+      animation: radarExpand 2.6s cubic-bezier(0.1, 0.7, 0.2, 1) infinite;
+      pointer-events: none;
+    }
+
+    .radar-wave:nth-child(1) {
+      animation-delay: 0s;
+    }
+
+    .radar-wave:nth-child(2) {
+      animation-delay: 0.85s;
+    }
+
+    .radar-wave:nth-child(3) {
+      animation-delay: 1.7s;
+    }
+
+    @keyframes radarExpand {
+      0% {
+        transform: scale(0.6);
+        opacity: 0.9;
+      }
+      60% {
+        opacity: 0.35;
+      }
+      100% {
+        transform: scale(1.6);
+        opacity: 0;
+      }
+    }
+
+    .waiting-center-icon {
+      position: relative;
+      z-index: 2;
+      width: 64px;
+      height: 64px;
+      border-radius: 20px;
+      background: linear-gradient(135deg, rgba(245, 158, 11, 0.2), rgba(217, 119, 6, 0.15));
+      border: 1px solid rgba(245, 158, 11, 0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fbbf24;
+      box-shadow: 0 0 28px rgba(245, 158, 11, 0.32);
+      animation: beaconFloat 3s ease-in-out infinite;
+    }
+
+    .waiting-center-icon svg {
+      width: 32px;
+      height: 32px;
+      filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+    }
+
+    @keyframes beaconFloat {
+      0%, 100% {
+        transform: translateY(0);
+      }
+      50% {
+        transform: translateY(-4px);
+      }
+    }
+
+    .status-badge-waiting {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: rgba(245, 158, 11, 0.14);
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      color: #fbbf24;
+      padding: 0.45rem 1rem;
+      border-radius: 9999px;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      margin-bottom: 1.25rem;
+    }
+
+    .pulse-dot-amber {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--warning);
+      box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.7);
+      animation: pulseAmber 1.6s infinite;
+    }
+
+    @keyframes pulseAmber {
+      0% {
+        box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.7);
+      }
+      70% {
+        box-shadow: 0 0 0 8px rgba(245, 158, 11, 0);
+      }
+      100% {
+        box-shadow: 0 0 0 0 rgba(245, 158, 11, 0);
+      }
+    }
+
+    /* Animated Shimmer Line */
+    .shimmer-track {
+      width: 100%;
+      height: 4px;
+      background: rgba(255, 255, 255, 0.07);
+      border-radius: 9999px;
+      overflow: hidden;
+      position: relative;
+      margin: 1.35rem 0 1.25rem;
+    }
+
+    .shimmer-indicator {
+      position: absolute;
+      top: 0;
+      left: -40%;
+      height: 100%;
+      width: 45%;
+      background: linear-gradient(90deg, transparent, #f59e0b, #fbbf24, transparent);
+      border-radius: 9999px;
+      animation: shimmerFlow 1.8s ease-in-out infinite;
+    }
+
+    @keyframes shimmerFlow {
+      0% {
+        left: -45%;
+      }
+      100% {
+        left: 105%;
+      }
+    }
+
+    /* Waiting & Status Info Cards */
+    .info-card {
+      background: rgba(15, 23, 42, 0.65);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 16px;
+      padding: 1.15rem 1.25rem;
+      margin: 1.25rem 0;
+      text-align: left;
+    }
+
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.875rem;
+      padding: 0.35rem 0;
+    }
+
+    .info-row + .info-row {
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      margin-top: 0.45rem;
+      padding-top: 0.55rem;
+    }
+
+    .info-title {
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .info-value-amber {
+      color: #fbbf24;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .timer-pill {
+      background: rgba(245, 158, 11, 0.12);
+      border: 1px solid rgba(245, 158, 11, 0.25);
+      border-radius: 8px;
+      padding: 2px 8px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.85rem;
+      color: #fbbf24;
+      font-weight: 600;
+    }
+
+    /* ------------------------------------------------------------- */
+    /* VIEW 3: SUCCESS STATE (Celebration Emerald Theme) */
+    /* ------------------------------------------------------------- */
+    .success-view {
+      display: none;
+      text-align: center;
+    }
+
+    .success-icon-wrapper {
+      width: 76px;
+      height: 76px;
+      margin: 0.5rem auto 1.5rem;
+      background: linear-gradient(135deg, rgba(16, 185, 129, 0.25), rgba(5, 150, 105, 0.2));
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #34d399;
+      border: 2px solid rgba(16, 185, 129, 0.45);
+      box-shadow: 0 0 35px var(--success-glow);
+      animation: popInSuccess 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    }
+
+    .success-icon-wrapper svg {
+      width: 40px;
+      height: 40px;
+      stroke-width: 2.5;
+    }
+
+    @keyframes popInSuccess {
+      0% {
+        transform: scale(0.4);
+        opacity: 0;
+      }
+      80% {
+        transform: scale(1.12);
+      }
+      100% {
+        transform: scale(1);
+        opacity: 1;
+      }
+    }
+
+    .status-badge-success {
       display: inline-flex;
       align-items: center;
       gap: 0.5rem;
       background: rgba(16, 185, 129, 0.15);
-      border: 1px solid rgba(16, 185, 129, 0.3);
+      border: 1px solid rgba(16, 185, 129, 0.35);
       color: #6ee7b7;
       padding: 0.45rem 1rem;
       border-radius: 9999px;
       font-size: 0.8125rem;
       font-weight: 600;
-      margin-bottom: 1.5rem;
+      margin-bottom: 1.25rem;
     }
 
-    .pulse-dot {
+    .pulse-dot-green {
       width: 8px;
       height: 8px;
       border-radius: 50%;
       background: var(--success);
       box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
-      animation: pulse 1.6s infinite;
+      animation: pulseGreen 1.6s infinite;
     }
 
-    @keyframes pulse {
+    @keyframes pulseGreen {
       0% {
         box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
       }
@@ -311,50 +648,117 @@
       }
     }
 
-    .status-card {
-      background: rgba(15, 23, 42, 0.6);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      border-radius: 16px;
-      padding: 1.15rem 1.25rem;
-      margin: 1.5rem 0;
-      text-align: left;
-    }
-
-    .status-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      font-size: 0.875rem;
-    }
-
-    .status-title {
-      color: var(--text-muted);
-      font-weight: 500;
-    }
-
-    .status-highlight {
+    .info-value-success {
       color: #6ee7b7;
       font-weight: 600;
       display: flex;
       align-items: center;
-      gap: 0.35rem;
+      gap: 0.4rem;
+    }
+
+    /* ------------------------------------------------------------- */
+    /* VIEW 4: REJECTED STATE */
+    /* ------------------------------------------------------------- */
+    .rejected-view {
+      display: none;
+      text-align: center;
+    }
+
+    .rejected-icon-wrapper {
+      width: 72px;
+      height: 72px;
+      margin: 0.5rem auto 1.5rem;
+      background: rgba(239, 68, 68, 0.14);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      box-shadow: 0 0 30px var(--error-glow);
+    }
+
+    .rejected-icon-wrapper svg {
+      width: 36px;
+      height: 36px;
+    }
+
+    .status-badge-rejected {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      color: #fca5a5;
+      padding: 0.45rem 1rem;
+      border-radius: 9999px;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      margin-bottom: 1.25rem;
     }
 
     .footer {
-      margin-top: 2rem;
+      margin-top: 1.75rem;
       text-align: center;
       font-size: 0.775rem;
       color: var(--text-muted);
       letter-spacing: 0.01em;
     }
+
+    /* ------------------------------------------------------------- */
+    /* RESPONSIVE BREAKPOINTS */
+    /* ------------------------------------------------------------- */
+    @media (max-width: 440px) {
+      body {
+        padding: 0.75rem;
+      }
+
+      .card {
+        padding: 1.65rem 1.15rem;
+        border-radius: 20px;
+      }
+
+      h1 {
+        font-size: 1.35rem;
+      }
+
+      p.subtitle {
+        font-size: 0.825rem;
+      }
+
+      .card-top-bar {
+        gap: 0.5rem;
+        margin-bottom: 1.25rem;
+      }
+
+      .network-badge {
+        padding: 0.35rem 0.65rem;
+        font-size: 0.725rem;
+      }
+
+      .lang-btn {
+        padding: 4px 8px;
+        font-size: 0.725rem;
+      }
+    }
+
+    @media (max-width: 340px) {
+      .card {
+        padding: 1.35rem 0.95rem;
+      }
+
+      .network-name {
+        max-width: 90px;
+      }
+    }
   </style>
 </head>
 <body>
-  <div class="glow-sphere"></div>
+  <div id="glowSphere" class="glow-sphere"></div>
 
   <div class="container">
-    <div class="card">
-      <!-- Card Top Bar: Wi-Fi SSID & Language Selector -->
+    <div id="mainCard" class="card">
+      <!-- Card Top Bar: Wi-Fi Badge & Language Selector -->
       <div class="card-top-bar">
         <div class="network-badge">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -363,7 +767,7 @@
             <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
             <line x1="12" y1="20" x2="12.01" y2="20"></line>
           </svg>
-          <span id="networkName" class="network-name">ইন্টারনেট</span>
+          <span id="networkName" class="network-name">নেটওয়ার্ক</span>
         </div>
 
         <div class="lang-toggle">
@@ -373,7 +777,7 @@
       </div>
 
       <!-- VIEW 1: Portal Request Form -->
-      <div id="requestView">
+      <div id="requestView" class="view-container">
         <div class="header">
           <div class="icon-wrapper">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -398,13 +802,13 @@
               id="userName"
               name="name"
               required
-              autocomplete="off"
+              autocomplete="name"
               maxlength="64"
               autofocus
             />
           </div>
 
-          <!-- Hidden MAC field (populated from openNDS query params or client fingerprint) -->
+          <!-- Hidden MAC field -->
           <input type="hidden" id="clientMac" name="mac" />
 
           <button type="submit" id="submitBtn" class="btn">
@@ -414,35 +818,123 @@
         </form>
       </div>
 
-      <!-- VIEW 2: Pending Approval Confirmation -->
-      <div id="confirmationView" class="confirmation-view">
-        <div class="status-badge">
-          <span class="pulse-dot"></span>
-          <span id="pendingBadgeText">অ্যাডমিনের কাছে অনুরোধ পাঠানো হয়েছে</span>
-        </div>
-        <div class="icon-wrapper" style="color: var(--success); background: rgba(16, 185, 129, 0.12); border-color: rgba(16, 185, 129, 0.25); box-shadow: 0 0 24px var(--success-glow);">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="20 6 9 17 4 12"></polyline>
-          </svg>
-        </div>
-        <h1 id="pendingTitleText">অনুমোদনের অপেক্ষায়...</h1>
-        <p class="subtitle" style="margin-bottom: 1.25rem;">
-          <span id="pendingThankText">ধন্যবাদ,</span> <strong id="confirmedName" style="color: var(--text-main);"></strong>। <span id="pendingForwardText">আপনার অনুরোধটি গৃহীত হয়েছে এবং অ্যাডমিনের অনুমোদনের জন্য পাঠানো হয়েছে।</span>
-        </p>
-
-        <div class="status-card">
-          <div class="status-row">
-            <span class="status-title" id="pendingStatusLabel">সংযোগের অবস্থা:</span>
-            <span class="status-highlight" id="pendingStatusValue">
-              <span class="pulse-dot"></span>
-              অনুমোদনের অপেক্ষায়
-            </span>
+      <!-- VIEW 2: REDESIGNED WAITING PAGE (Amber Radiant Theme with Subtle Animations) -->
+      <div id="waitingView" class="view-container waiting-view">
+        <!-- Radar Pulse Animated Center Beacon -->
+        <div class="radar-beacon-container">
+          <div class="radar-wave"></div>
+          <div class="radar-wave"></div>
+          <div class="radar-wave"></div>
+          <div class="waiting-center-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path>
+            </svg>
           </div>
         </div>
 
-        <p id="pendingFooterNote" class="subtitle" style="font-size: 0.8125rem;">
-          অ্যাডমিন অনুমোদন দিলে আপনার ইন্টারনেট সংযোগটি স্বয়ংক্রিয়ভাবে সক্রিয় হবে। অনুগ্রহ করে এই পেজটি খোলা রাখুন।
+        <div class="status-badge-waiting">
+          <span class="pulse-dot-amber"></span>
+          <span id="waitingBadgeText">অ্যাডমিনের অনুমোদনের অপেক্ষায়</span>
+        </div>
+
+        <h1 id="waitingTitleText">অনুরোধ বিবেচনাধীন...</h1>
+        <p class="subtitle" style="margin-bottom: 0.5rem;">
+          <span id="waitingSubPrefix">ধন্যবাদ,</span> <strong id="waitingName" style="color: var(--text-main);"></strong>।
+          <span id="waitingSubSuffix">আপনার অনুরোধটি অ্যাডমিনের অনুমোদনের জন্য পাঠানো হয়েছে।</span>
         </p>
+
+        <!-- Dynamic Shimmer Line -->
+        <div class="shimmer-track">
+          <div class="shimmer-indicator"></div>
+        </div>
+
+        <div class="info-card">
+          <div class="info-row">
+            <span class="info-title" id="waitingStatusLabel">সংযোগের অবস্থা:</span>
+            <span class="info-value-amber" id="waitingStatusVal">
+              <span class="pulse-dot-amber"></span>
+              <span id="waitingStatusText">বিবেচনাধীন</span>
+            </span>
+          </div>
+          <div class="info-row">
+            <span class="info-title" id="waitingTimerLabel">অপেক্ষার সময়:</span>
+            <span class="timer-pill" id="waitingTimerVal">০০:০০</span>
+          </div>
+        </div>
+
+        <p id="waitingTipText" class="subtitle" style="font-size: 0.8125rem;">
+          অ্যাডমিন অনুমোদন দিলে আপনার ইন্টারনেট স্বয়ংক্রিয়ভাবে সক্রিয় হবে। অনুগ্রহ করে এই পেজটি খোলা রাখুন।
+        </p>
+      </div>
+
+      <!-- VIEW 3: SUCCESS STATE (Celebration Emerald Theme) -->
+      <div id="successView" class="view-container success-view">
+        <div class="success-icon-wrapper">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 6L9 17l-5-5"></path>
+          </svg>
+        </div>
+
+        <div class="status-badge-success">
+          <span class="pulse-dot-green"></span>
+          <span id="successBadgeText">এক্সেস অনুমোদিত</span>
+        </div>
+
+        <h1 id="successTitleText">ইন্টারনেট সংযোগ সক্রিয়!</h1>
+        <p class="subtitle" style="margin-bottom: 1.25rem;">
+          <span id="successSubPrefix">অভিনন্দন,</span> <strong id="successName" style="color: var(--text-main);"></strong>!
+          <span id="successSubSuffix">আপনার ইন্টারনেট অ্যাক্সেস সফলভাবে অনুমোদিত হয়েছে।</span>
+        </p>
+
+        <div class="info-card">
+          <div class="info-row">
+            <span class="info-title" id="successStatusLabel">সংযোগের অবস্থা:</span>
+            <span class="info-value-success">
+              <span class="pulse-dot-green"></span>
+              <span id="successStatusVal">অনলাইন ও প্রস্তুত</span>
+            </span>
+          </div>
+          <div class="info-row">
+            <span class="info-title" id="successDurationLabel">মেয়াদ:</span>
+            <span id="successDurationVal" style="color: var(--text-main); font-weight: 600;">আনলিমিটেড</span>
+          </div>
+        </div>
+
+        <a href="https://www.google.com" target="_blank" id="btnStartBrowsing" class="btn btn-success">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="2" y1="12" x2="22" y2="12"></line>
+            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+          </svg>
+          <span id="btnBrowseText">ইন্টারনেট ব্যবহার শুরু করুন</span>
+        </a>
+
+        <p id="successTipText" class="subtitle" style="font-size: 0.8125rem; margin-top: 1rem;">
+          আপনার ডিভাইস এখন যেকোনো ওয়েবসাইট বা অ্যাপ ব্যবহারে সক্ষম।
+        </p>
+      </div>
+
+      <!-- VIEW 4: REJECTED STATE -->
+      <div id="rejectedView" class="view-container rejected-view">
+        <div class="rejected-icon-wrapper">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </div>
+
+        <div class="status-badge-rejected">
+          <span id="rejectedBadgeText">অনুরোধ বাতিল করা হয়েছে</span>
+        </div>
+
+        <h1 id="rejectedTitleText">অনুমোদন সম্পন্ন হয়নি</h1>
+        <p id="rejectedSubText" class="subtitle" style="margin-bottom: 1.5rem;">
+          নেটওয়ার্ক অ্যাডমিন আপনার অনুরোধটি বাতিল করেছেন। প্রয়োজনে অ্যাডমিনের সাথে যোগাযোগ করুন।
+        </p>
+
+        <button type="button" class="btn btn-secondary" onclick="resetToRequestView()">
+          <span id="btnTryAgainText">আবার চেষ্টা করুন</span>
+        </button>
       </div>
 
       <div class="footer">
@@ -453,47 +945,107 @@
 
   <script>
     // -------------------------------------------------------------------------
-    // Translations (English & Bangla)
+    // Multilingual Translations (English & Bangla)
     // -------------------------------------------------------------------------
     const translations = {
       en: {
+        networkName: "Network",
         title: "Internet Access Request",
         subtitle: "Please provide your name to request internet access from the network administrator.",
         labelName: "Full Name",
         placeholderName: "",
         btnSubmit: "Request Internet Access",
         btnSubmitting: "Sending Request...",
-        pendingBadge: "Request Sent to Admin",
-        pendingTitle: "Pending Approval",
-        pendingThank: "Thank you,",
-        pendingForward: "Your request has been received and forwarded to the administrator.",
-        pendingStatusLabel: "Connection Status:",
-        pendingStatusValue: "Awaiting Approval",
-        pendingFooter: "Once the administrator approves your session, your internet connection will be activated automatically. Please keep this window open.",
+
+        // Waiting View
+        waitingBadge: "Awaiting Admin Approval",
+        waitingTitle: "Request Under Review...",
+        waitingSubPrefix: "Thank you,",
+        waitingSubSuffix: "Your request has been forwarded to the network administrator.",
+        waitingStatusLabel: "Connection Status:",
+        waitingStatusVal: "Pending Review",
+        waitingTimerLabel: "Waiting time:",
+        waitingTip: "Once the administrator approves your session, internet will activate automatically. Please keep this page open.",
+
+        // Success View
+        successBadge: "Access Granted",
+        successTitle: "You're Connected!",
+        successSubPrefix: "Congratulations,",
+        successSubSuffix: "Your internet access has been successfully approved.",
+        successStatusLabel: "Connection Status:",
+        successStatusVal: "Online & Ready",
+        successDurationLabel: "Duration:",
+        durationUnlimited: "Unlimited",
+        durationMinutes: "{n} Minutes",
+        durationHour: "1 Hour",
+        btnBrowse: "Start Browsing Internet",
+        successTip: "Your device is now fully connected to the network and ready to browse.",
+
+        // Rejected View
+        rejectedBadge: "Request Not Approved",
+        rejectedTitle: "Access Declined",
+        rejectedSub: "The network administrator did not approve your access request. Please contact the administrator if needed.",
+        btnTryAgain: "Try Again",
+
+        // Errors
         errorName: "Please enter your full name.",
         errorDefault: "Failed to submit access request. Please try again."
       },
       bn: {
+        networkName: "নেটওয়ার্ক",
         title: "ইন্টারনেট সংযোগের জন্য অনুরোধ",
         subtitle: "ইন্টারনেট অ্যাক্সেস পেতে আপনার নাম লিখে নেটওয়ার্ক অ্যাডমিনের কাছে অনুমোদনের অনুরোধ পাঠান।",
         labelName: "আপনার পূর্ণ নাম",
         placeholderName: "",
         btnSubmit: "ইন্টারনেট অ্যাক্সেসের অনুরোধ করুন",
         btnSubmitting: "অনুরোধ পাঠানো হচ্ছে...",
-        pendingBadge: "অ্যাডমিনের কাছে অনুরোধ পাঠানো হয়েছে",
-        pendingTitle: "অনুমোদনের অপেক্ষায়...",
-        pendingThank: "ধন্যবাদ,",
-        pendingForward: "আপনার অনুরোধটি গৃহীত হয়েছে এবং অ্যাডমিনের অনুমোদনের জন্য পাঠানো হয়েছে।",
-        pendingStatusLabel: "সংযোগের অবস্থা:",
-        pendingStatusValue: "অনুমোদনের অপেক্ষায়",
-        pendingFooter: "অ্যাডমিন অনুমোদন দিলে আপনার ইন্টারনেট সংযোগটি স্বয়ংক্রিয়ভাবে সক্রিয় হবে। অনুগ্রহ করে এই পেজটি খোলা রাখুন।",
+
+        // Waiting View
+        waitingBadge: "অ্যাডমিনের অনুমোদনের অপেক্ষায়",
+        waitingTitle: "অনুরোধ বিবেচনাধীন...",
+        waitingSubPrefix: "ধন্যবাদ,",
+        waitingSubSuffix: "আপনার অনুরোধটি অ্যাডমিনের অনুমোদনের জন্য পাঠানো হয়েছে।",
+        waitingStatusLabel: "সংযোগের অবস্থা:",
+        waitingStatusVal: "বিবেচনাধীন",
+        waitingTimerLabel: "অপেক্ষার সময়:",
+        waitingTip: "অ্যাডমিন অনুমোদন দিলে আপনার ইন্টারনেট স্বয়ংক্রিয়ভাবে সক্রিয় হবে। অনুগ্রহ করে এই পেজটি খোলা রাখুন।",
+
+        // Success View
+        successBadge: "এক্সেস অনুমোদিত",
+        successTitle: "ইন্টারনেট সংযোগ সক্রিয়!",
+        successSubPrefix: "অভিনন্দন,",
+        successSubSuffix: "আপনার ইন্টারনেট অ্যাক্সেস সফলভাবে অনুমোদিত হয়েছে।",
+        successStatusLabel: "সংযোগের অবস্থা:",
+        successStatusVal: "অনলাইন ও প্রস্তুত",
+        successDurationLabel: "মেয়াদ:",
+        durationUnlimited: "আনলিমিটেড",
+        durationMinutes: "{n} মিনিট",
+        durationHour: "১ ঘণ্টা",
+        btnBrowse: "ইন্টারনেট ব্যবহার শুরু করুন",
+        successTip: "আপনার ডিভাইস এখন যেকোনো ওয়েবসাইট বা অ্যাপ ব্যবহারে সক্ষম।",
+
+        // Rejected View
+        rejectedBadge: "অনুরোধ বাতিল করা হয়েছে",
+        rejectedTitle: "অনুমোদন সম্পন্ন হয়নি",
+        rejectedSub: "নেটওয়ার্ক অ্যাডমিন আপনার অনুরোধটি বাতিল করেছেন। প্রয়োজনে অ্যাডমিনের সাথে যোগাযোগ করুন।",
+        btnTryAgain: "আবার চেষ্টা করুন",
+
+        // Errors
         errorName: "অনুগ্রহ করে আপনার পুরো নাম লিখুন।",
         errorDefault: "অনুরোধ পাঠানো সম্ভব হয়নি। পুনরায় চেষ্টা করুন।"
       }
     };
 
-    // Default language is Bangla ('bn')
     let currentLang = 'bn';
+    let currentUserName = '';
+    let currentDuration = 0;
+    let waitingSeconds = 0;
+    let elapsedTimer = null;
+    let pollTimer = null;
+    let activeViewId = 'requestView';
+
+    const mainCard = document.getElementById('mainCard');
+    const glowSphere = document.getElementById('glowSphere');
 
     function setLanguage(lang) {
       currentLang = lang;
@@ -502,18 +1054,103 @@
       document.getElementById('langEnBtn').classList.toggle('active', lang === 'en');
       document.getElementById('langBnBtn').classList.toggle('active', lang === 'bn');
 
+      // Top bar badge: always shows "নেটওয়ার্ক" or "Network" as requested
+      document.getElementById('networkName').textContent = t.networkName;
+
+      // View 1: Request
       document.getElementById('titleText').textContent = t.title;
       document.getElementById('subtitleText').textContent = t.subtitle;
       document.getElementById('labelName').textContent = t.labelName;
       document.getElementById('userName').placeholder = t.placeholderName;
       document.getElementById('btnText').textContent = t.btnSubmit;
-      document.getElementById('pendingBadgeText').textContent = t.pendingBadge;
-      document.getElementById('pendingTitleText').textContent = t.pendingTitle;
-      document.getElementById('pendingThankText').textContent = t.pendingThank;
-      document.getElementById('pendingForwardText').textContent = t.pendingForward;
-      document.getElementById('pendingStatusLabel').textContent = t.pendingStatusLabel;
-      document.getElementById('pendingStatusValue').innerHTML = `<span class="pulse-dot"></span> ${t.pendingStatusValue}`;
-      document.getElementById('pendingFooterNote').textContent = t.pendingFooter;
+
+      // View 2: Waiting
+      document.getElementById('waitingBadgeText').textContent = t.waitingBadge;
+      document.getElementById('waitingTitleText').textContent = t.waitingTitle;
+      document.getElementById('waitingSubPrefix').textContent = t.waitingSubPrefix;
+      document.getElementById('waitingSubSuffix').textContent = t.waitingSubSuffix;
+      document.getElementById('waitingStatusLabel').textContent = t.waitingStatusLabel;
+      document.getElementById('waitingStatusText').textContent = t.waitingStatusVal;
+      document.getElementById('waitingTimerLabel').textContent = t.waitingTimerLabel;
+      document.getElementById('waitingTipText').textContent = t.waitingTip;
+      updateTimerDisplay();
+
+      // View 3: Success
+      document.getElementById('successBadgeText').textContent = t.successBadge;
+      document.getElementById('successTitleText').textContent = t.successTitle;
+      document.getElementById('successSubPrefix').textContent = t.successSubPrefix;
+      document.getElementById('successSubSuffix').textContent = t.successSubSuffix;
+      document.getElementById('successStatusLabel').textContent = t.successStatusLabel;
+      document.getElementById('successStatusVal').textContent = t.successStatusVal;
+      document.getElementById('successDurationLabel').textContent = t.successDurationLabel;
+      document.getElementById('btnBrowseText').textContent = t.btnBrowse;
+      document.getElementById('successTipText').textContent = t.successTip;
+      updateDurationDisplay(currentDuration);
+
+      // View 4: Rejected
+      document.getElementById('rejectedBadgeText').textContent = t.rejectedBadge;
+      document.getElementById('rejectedTitleText').textContent = t.rejectedTitle;
+      document.getElementById('rejectedSubText').textContent = t.rejectedSub;
+      document.getElementById('btnTryAgainText').textContent = t.btnTryAgain;
+    }
+
+    function toBanglaDigits(str) {
+      const bn = ['০','১','২','৩','৪','৫','৬','৭','৮','৯'];
+      return String(str).replace(/[0-9]/g, d => bn[d]);
+    }
+
+    function formatTime(sec) {
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    }
+
+    function updateTimerDisplay() {
+      const formatted = formatTime(waitingSeconds);
+      const el = document.getElementById('waitingTimerVal');
+      if (el) {
+        el.textContent = currentLang === 'bn' ? toBanglaDigits(formatted) : formatted;
+      }
+    }
+
+    function updateDurationDisplay(duration) {
+      currentDuration = duration;
+      const t = translations[currentLang];
+      const el = document.getElementById('successDurationVal');
+      if (!el) return;
+
+      if (!duration || duration === 0) {
+        el.textContent = t.durationUnlimited;
+      } else if (duration === 60) {
+        el.textContent = t.durationHour;
+      } else {
+        const numStr = currentLang === 'bn' ? toBanglaDigits(duration) : String(duration);
+        el.textContent = t.durationMinutes.replace('{n}', numStr);
+      }
+    }
+
+    function switchView(viewId) {
+      activeViewId = viewId;
+      const views = ['requestView', 'waitingView', 'successView', 'rejectedView'];
+      views.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = (id === viewId) ? 'block' : 'none';
+      });
+
+      // Update Card & Glow Theme
+      mainCard.className = 'card';
+      glowSphere.className = 'glow-sphere';
+
+      if (viewId === 'waitingView') {
+        mainCard.classList.add('waiting-mode');
+        glowSphere.classList.add('waiting-glow');
+      } else if (viewId === 'successView') {
+        mainCard.classList.add('success-mode');
+        glowSphere.classList.add('success-glow');
+      } else if (viewId === 'rejectedView') {
+        mainCard.classList.add('rejected-mode');
+        glowSphere.classList.add('rejected-glow');
+      }
     }
 
     // -------------------------------------------------------------------------
@@ -554,30 +1191,13 @@
     const resolvedMac = fasData.clientMac || rawMac;
     const resolvedIp = fasData.clientIp || rawIp;
 
-    const networkName = document.getElementById('networkName');
-    if (fasData.gatewayName && networkName) {
-      networkName.textContent = fasData.gatewayName;
-    }
-
-    const clientMacInput = document.getElementById('clientMac');
-    const accessForm = document.getElementById('accessForm');
-    const submitBtn = document.getElementById('submitBtn');
-    const btnText = document.getElementById('btnText');
-    const btnSpinner = document.getElementById('btnSpinner');
-    const errorAlert = document.getElementById('errorAlert');
-
-    const requestView = document.getElementById('requestView');
-    const confirmationView = document.getElementById('confirmationView');
-    const confirmedName = document.getElementById('confirmedName');
-
-    // Helper: Generate or retrieve a persistent mock MAC for local testing when no openNDS query param exists
+    // Helper: Generate or retrieve persistent mock MAC for local testing
     function getOrCreateClientMac() {
       if (resolvedMac && resolvedMac.trim()) {
         return resolvedMac.trim().toLowerCase();
       }
       let storedMac = localStorage.getItem('opennds_client_mac');
       if (!storedMac) {
-        // Generate pseudo MAC starting with locally administered prefix 02:xx:xx:xx:xx:xx
         const bytes = [0x02];
         for (let i = 0; i < 5; i++) {
           bytes.push(Math.floor(Math.random() * 256));
@@ -588,20 +1208,27 @@
       return storedMac;
     }
 
-    // Set MAC silently in the background
     const clientMacAddress = getOrCreateClientMac();
-    clientMacInput.value = clientMacAddress;
+    const clientMacInput = document.getElementById('clientMac');
+    if (clientMacInput) clientMacInput.value = clientMacAddress;
 
-    // Apply default language on load
+    const accessForm = document.getElementById('accessForm');
+    const submitBtn = document.getElementById('submitBtn');
+    const btnText = document.getElementById('btnText');
+    const btnSpinner = document.getElementById('btnSpinner');
+    const errorAlert = document.getElementById('errorAlert');
+
+    // Apply default language on initial load
     setLanguage('bn');
 
-    // Ensure input field is clean with active blinking cursor
     const userNameInput = document.getElementById('userName');
-    userNameInput.value = '';
-    userNameInput.focus();
+    if (userNameInput) {
+      userNameInput.value = '';
+      userNameInput.focus();
+    }
 
     // -------------------------------------------------------------------------
-    // Form Submission Handling
+    // Form Submission & Flow Management
     // -------------------------------------------------------------------------
     accessForm.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -615,6 +1242,7 @@
         return;
       }
 
+      currentUserName = name;
       setLoading(true);
 
       try {
@@ -625,35 +1253,34 @@
           fas: fasParam || undefined
         };
 
-        // Send to /api/login (or fallback to /api/request)
         let res = await fetch('/api/login', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
 
         if (!res.ok && res.status !== 400) {
           res = await fetch('/api/request', {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
           });
         }
 
         const data = await res.json();
-
         if (!res.ok) {
           throw new Error(data.error || t.errorDefault);
         }
 
-        // Show Confirmation View without displaying MAC
-        confirmedName.textContent = name;
-        requestView.style.display = 'none';
-        confirmationView.style.display = 'block';
+        // Save submitted state to sessionStorage
+        try {
+          sessionStorage.setItem('wifi_requested_mac', clientMacAddress);
+          sessionStorage.setItem('wifi_requested_name', name);
+          sessionStorage.setItem('wifi_requested_time', String(Date.now()));
+        } catch (e) {}
+
+        // Enter Redesigned Waiting Mode
+        startWaitingView(name);
 
       } catch (err) {
         showError(err.message || t.errorDefault);
@@ -661,6 +1288,90 @@
         setLoading(false);
       }
     });
+
+    function startWaitingView(name) {
+      currentUserName = name;
+      document.getElementById('waitingName').textContent = name;
+      waitingSeconds = 0;
+      updateTimerDisplay();
+
+      switchView('waitingView');
+
+      // Stop existing timers
+      stopAllTimers();
+
+      // Start elapsed timer (every 1s)
+      elapsedTimer = setInterval(() => {
+        waitingSeconds++;
+        updateTimerDisplay();
+      }, 1000);
+
+      // Start status polling (every 2.5s)
+      checkApprovalStatus();
+      pollTimer = setInterval(checkApprovalStatus, 2500);
+    }
+
+    async function checkApprovalStatus() {
+      if (!clientMacAddress) return;
+
+      try {
+        const res = await fetch(`/api/status?mac=${encodeURIComponent(clientMacAddress)}`);
+        if (!res.ok) return;
+
+        const data = await res.json();
+        const status = String(data.status || '').toLowerCase();
+
+        if (status === 'authorized' || status === 'authenticated') {
+          stopAllTimers();
+          showSuccessView(data.name || currentUserName, data.duration);
+        } else if (status === 'terminated' || status === 'rejected') {
+          stopAllTimers();
+          showRejectedView(data.name || currentUserName);
+        }
+      } catch (err) {
+        // Tolerated during network switch or router firewall refresh
+      }
+    }
+
+    function showSuccessView(name, duration) {
+      stopAllTimers();
+      currentUserName = name || currentUserName;
+      document.getElementById('successName').textContent = currentUserName;
+      updateDurationDisplay(duration);
+      switchView('successView');
+    }
+
+    function showRejectedView(name) {
+      stopAllTimers();
+      switchView('rejectedView');
+    }
+
+    function resetToRequestView() {
+      stopAllTimers();
+      try {
+        sessionStorage.removeItem('wifi_requested_mac');
+        sessionStorage.removeItem('wifi_requested_name');
+        sessionStorage.removeItem('wifi_requested_time');
+      } catch (e) {}
+
+      switchView('requestView');
+      const input = document.getElementById('userName');
+      if (input) {
+        input.value = '';
+        input.focus();
+      }
+    }
+
+    function stopAllTimers() {
+      if (elapsedTimer) {
+        clearInterval(elapsedTimer);
+        elapsedTimer = null;
+      }
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    }
 
     function setLoading(isLoading) {
       submitBtn.disabled = isLoading;
@@ -678,6 +1389,33 @@
       errorAlert.textContent = msg;
       errorAlert.style.display = 'block';
     }
+
+    // -------------------------------------------------------------------------
+    // Session Restoration: Check if user was already waiting or authorized
+    // -------------------------------------------------------------------------
+    (async function checkExistingSession() {
+      try {
+        const storedMac = sessionStorage.getItem('wifi_requested_mac');
+        const storedName = sessionStorage.getItem('wifi_requested_name');
+        const storedTime = parseInt(sessionStorage.getItem('wifi_requested_time') || '0', 10);
+
+        // If request was made in last 30 minutes, resume check
+        if (storedMac && storedMac === clientMacAddress && (Date.now() - storedTime) < 30 * 60 * 1000) {
+          currentUserName = storedName || '';
+          const res = await fetch(`/api/status?mac=${encodeURIComponent(clientMacAddress)}`);
+          if (res.ok) {
+            const data = await res.json();
+            const st = String(data.status || '').toLowerCase();
+            if (st === 'authorized' || st === 'authenticated') {
+              showSuccessView(data.name || storedName, data.duration);
+            } else if (st === 'pending') {
+              waitingSeconds = Math.min(Math.floor((Date.now() - storedTime) / 1000), 1800);
+              startWaitingView(storedName || '');
+            }
+          }
+        }
+      } catch (e) {}
+    })();
   </script>
 </body>
 </html>

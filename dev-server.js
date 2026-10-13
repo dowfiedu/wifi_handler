@@ -22,6 +22,7 @@ import adminHandler from './api/admin.js';
 import loginHandler from './api/login.js';
 import pendingAuthHandler from './api/pending-auth.js';
 import confirmAuthHandler from './api/confirm-auth.js';
+import statusHandler from './api/status.js';
 import { parseFasToken } from './lib/opennds.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -232,6 +233,33 @@ const server = http.createServer(async (req, res) => {
     return res.status(200).json({ success: true, mac: cleanMac, status: 'AUTHENTICATED', simulated: true });
   }
 
+  if (pathname === '/api/status') {
+    if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
+      return statusHandler(req, res);
+    }
+
+    const targetMac = parsedUrl.searchParams.get('mac');
+    if (!targetMac) {
+      return res.status(400).json({ error: 'Query parameter "mac" is required.' });
+    }
+
+    const cleanMac = targetMac.trim().toLowerCase();
+    const reqRecord = localDevRequests.find(r => r.mac.toLowerCase() === cleanMac);
+
+    if (!reqRecord) {
+      return res.status(200).json({ mac: cleanMac, status: 'pending', simulated: true });
+    }
+
+    const st = (reqRecord.status || 'pending').toLowerCase();
+    return res.status(200).json({
+      mac: cleanMac,
+      name: reqRecord.name,
+      status: st,
+      duration: reqRecord.duration !== undefined ? reqRecord.duration : 0,
+      simulated: true
+    });
+  }
+
   if (pathname === '/api/request') {
     req.body = await parseBody(req);
 
@@ -284,6 +312,17 @@ const server = http.createServer(async (req, res) => {
         const { action, mac, duration } = parsed;
         const cmd = action === 'auth' ? `ndsctl auth ${mac} ${duration}` : `ndsctl deauth ${mac}`;
         localDevQueue.push(cmd);
+
+        // Update in-memory dev requests status
+        const cleanMac = mac.toLowerCase();
+        const found = localDevRequests.find(r => r.mac.toLowerCase() === cleanMac);
+        if (found) {
+          found.status = action === 'auth' ? 'authorized' : 'rejected';
+          found.duration = duration;
+          found.reviewedAt = new Date().toISOString();
+          found.reviewedBy = 'Telegram Bot Admin';
+        }
+
         console.log(`\n--- 📱 [LOCAL DEV: SIMULATED TELEGRAM CALLBACK] ---`);
         console.log(`Action:         ${action.toUpperCase()}`);
         console.log(`MAC:            ${mac}`);

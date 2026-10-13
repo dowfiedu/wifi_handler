@@ -9,6 +9,7 @@ import adminHandler from '../api/admin.js';
 import loginHandler from '../api/login.js';
 import pendingAuthHandler from '../api/pending-auth.js';
 import confirmAuthHandler from '../api/confirm-auth.js';
+import statusHandler from '../api/status.js';
 
 // Helper mock response factory
 function createMockRes() {
@@ -529,5 +530,46 @@ describe('API Endpoints Validation & Status Codes', () => {
     assert.equal(res.statusCode, 200);
     assert.equal(res.body.success, true);
     assert.equal(res.body.mac, '00:11:22:33:44:55');
+  });
+
+  test('/api/status rejects non-GET requests with 405', async () => {
+    const req = { method: 'POST' };
+    const res = createMockRes();
+
+    await statusHandler(req, res);
+
+    assert.equal(res.statusCode, 405);
+    assert.match(res.body.error, /Method POST Not Allowed/);
+  });
+
+  test('/api/status rejects missing or invalid MAC with 400', async () => {
+    const req = { method: 'GET', url: 'http://localhost/api/status' };
+    const res = createMockRes();
+
+    await statusHandler(req, res);
+
+    assert.equal(res.statusCode, 400);
+    assert.match(res.body.error, /Field "mac" is required/);
+
+    const reqInvalid = { method: 'GET', url: 'http://localhost/api/status?mac=not-a-mac' };
+    const resInvalid = createMockRes();
+
+    await statusHandler(reqInvalid, resInvalid);
+
+    assert.equal(resInvalid.statusCode, 400);
+  });
+
+  test('/api/status returns fallback status when Redis is not configured', async () => {
+    delete process.env.UPSTASH_REDIS_REST_URL;
+    delete process.env.UPSTASH_REDIS_REST_TOKEN;
+
+    const req = { method: 'GET', url: 'http://localhost/api/status?mac=aa:bb:cc:dd:ee:ff' };
+    const res = createMockRes();
+
+    await statusHandler(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.mac, 'aa:bb:cc:dd:ee:ff');
+    assert.equal(res.body.status, 'pending');
   });
 });
