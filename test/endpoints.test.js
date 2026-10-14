@@ -1703,4 +1703,228 @@ describe('API Endpoints Validation & Status Codes', () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  test('/api/poll saves x-router-connected-macs to Redis live MAC cache', async () => {
+    process.env.ROUTER_SECRET_KEY = 'super-secret-123';
+    process.env.UPSTASH_REDIS_REST_URL = 'https://mock.upstash.io';
+    process.env.UPSTASH_REDIS_REST_TOKEN = 'mock-token';
+
+    const redisCommands = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      if (String(url).includes('upstash.io')) {
+        const body = JSON.parse(opts.body);
+        redisCommands.push(body);
+        if (Array.isArray(body)) {
+          const results = body.map(cmd => {
+            const op = String(Array.isArray(cmd) ? cmd[0] : '').toLowerCase();
+            if (op === 'lpop') {
+              return { result: 'ndsctl auth 00:11:22:33:44:55 30' };
+            }
+            return { result: 'OK' };
+          });
+          return new Response(JSON.stringify(results), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+        return new Response(JSON.stringify({ result: 'ndsctl auth 00:11:22:33:44:55 30' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    };
+
+    try {
+      const req = {
+        method: 'GET',
+        headers: {
+          'x-router-secret': 'super-secret-123',
+          'x-router-connected-macs': '06:31:5b:7a:aa:e7, 46:84:b7:da:39:73'
+        }
+      };
+      const res = createMockRes();
+      await pollHandler(req, res);
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.command, 'ndsctl auth 00:11:22:33:44:55 30');
+
+      // Verify that Redis was called with SET for router:live_connected_macs
+      const flatCommands = redisCommands.flat();
+      const setCall = flatCommands.find(cmd => Array.isArray(cmd) && String(cmd[0]).toLowerCase() === 'set' && cmd[1] === 'router:live_connected_macs');
+      assert.ok(setCall, 'router:live_connected_macs was saved');
+      const savedMacs = JSON.parse(setCall[2]);
+      assert.deepEqual(savedMacs, ['06:31:5b:7a:aa:e7', '46:84:b7:da:39:73']);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('/api/webhook /active sends separate user cards for live Wi-Fi users', async () => {
+    process.env.TELEGRAM_BOT_TOKEN = 'test-token';
+    process.env.UPSTASH_REDIS_REST_URL = 'https://mock.upstash.io';
+    process.env.UPSTASH_REDIS_REST_TOKEN = 'mock-token';
+
+    const telegramMessages = [];
+    const originalFetch = globalThis.fetch;
+    const enc = (s) => Buffer.from(String(s)).toString('base64');
+
+    globalThis.fetch = async (url, opts) => {
+      const urlStr = String(url);
+      if (urlStr.includes('upstash.io')) {
+        const body = JSON.parse(opts.body);
+        const executeRedisCmd = (cmd) => {
+          const op = String(Array.isArray(cmd) ? cmd[0] : '').toLowerCase();
+          const key = Array.isArray(cmd) ? cmd[1] : '';
+          if (op === 'get' && key === 'router:live_connected_macs') {
+            return JSON.stringify(['46:84:b7:da:39:73']);
+          }
+          if (op === 'lrange' && key === 'request_history') {
+            return [
+              JSON.stringify({ mac: '46:84:b7:da:39:73', name: 'Tanvir Live' }),
+              JSON.stringify({ mac: 'aa:bb:cc:dd:ee:ff', name: 'Offline User' })
+            ];
+          }
+          if (op === 'hgetall') {
+            if (key === 'request:46:84:b7:da:39:73') {
+              return [
+                enc('name'), enc('Tanvir Live'),
+                enc('mac'), enc('46:84:b7:da:39:73'),
+                enc('status'), enc('authorized'),
+                enc('duration'), enc('60'),
+                enc('ip'), enc('192.168.2.229'),
+                enc('reviewedAt'), enc(new Date().toISOString())
+              ];
+            }
+            return [
+              enc('name'), enc('Offline User'),
+              enc('mac'), enc('aa:bb:cc:dd:ee:ff'),
+              enc('status'), enc('authorized'),
+              enc('duration'), enc('60'),
+              enc('ip'), enc('192.168.2.111'),
+              enc('reviewedAt'), enc(new Date().toISOString())
+            ];
+          }
+          if (op === 'llen') return 0;
+          return 1;
+        };
+
+        if (Array.isArray(body)) {
+          if (body.length > 0 && Array.isArray(body[0])) {
+            const results = body.map(cmd => ({ result: executeRedisCmd(cmd) }));
+            return new Response(JSON.stringify(results), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' }
+            });
+          }
+          return new Response(JSON.stringify({ result: executeRedisCmd(body) }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+          });
+        }
+        return new Response(JSON.stringify({ result: 1 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      if (urlStr.includes('sendMessage')) {
+        const payload = JSON.parse(opts.body);
+        telegramMessages.push(payload);
+        return new Response(JSON.stringify({ ok: true, result: { message_id: Math.floor(Math.random() * 1000) } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    };
+
+    try {
+      const req = {
+        method: 'POST',
+        body: {
+          update_id: 1001,
+          message: {
+            text: '🟢 অ্যাক্টিভ ইউজার',
+            chat: { id: 12345 },
+            message_id: 501
+          }
+        }
+      };
+      const res = createMockRes();
+      await webhookHandler(req, res);
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.command, 'active');
+
+      // Verify messages sent: 1 header + 1 individual card (only Tanvir Live because aa:bb:cc is offline)
+      assert.equal(telegramMessages.length, 2);
+      assert.ok(telegramMessages[0].text.includes('Active Wi-Fi Users'));
+      assert.ok(telegramMessages[0].text.includes('মোট কানেক্টেড ইউজার:* 1 জন'));
+
+      // Check the individual card
+      assert.ok(telegramMessages[1].text.includes('Tanvir Live'));
+      assert.ok(telegramMessages[1].text.includes('46:84:b7:da:39:73'));
+      assert.equal(telegramMessages[1].reply_markup.inline_keyboard[0][0].text, '❌ সংযোগ বিচ্ছিন্ন করুন');
+      assert.equal(telegramMessages[1].reply_markup.inline_keyboard[0][0].callback_data, 'deauth_46:84:b7:da:39:73');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('/api/webhook deauth callback deletes active user card from Telegram chat', async () => {
+    process.env.TELEGRAM_BOT_TOKEN = 'test-token';
+    process.env.UPSTASH_REDIS_REST_URL = 'https://mock.upstash.io';
+    process.env.UPSTASH_REDIS_REST_TOKEN = 'mock-token';
+
+    const fetchCalls = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      fetchCalls.push({ url: String(url), body: opts?.body ? JSON.parse(opts.body) : null });
+      if (String(url).includes('upstash.io')) {
+        return new Response(JSON.stringify([{ result: 1 }]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      return new Response(JSON.stringify({ ok: true, result: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    };
+
+    try {
+      const req = {
+        method: 'POST',
+        body: {
+          callback_query: {
+            id: 'cb_deauth_active_1',
+            data: 'deauth_46:84:b7:da:39:73',
+            message: {
+              chat: { id: 12345 },
+              message_id: 888,
+              text: '👤 *ইউজার:* Tanvir\n🏷 *MAC অ্যাড্রেস:* `46:84:b7:da:39:73`\n_সংযোগ বিচ্ছিন্ন করতে নিচের বাটনে চাপ দিন:_'
+            },
+            from: { first_name: 'AdminUser' }
+          }
+        }
+      };
+      const res = createMockRes();
+      await webhookHandler(req, res);
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.ok, true);
+      assert.equal(res.body.commandQueued, 'ndsctl deauth 46:84:b7:da:39:73');
+
+      // Verify that deleteMessage was called for message_id 888
+      const deleteCall = fetchCalls.find(c => c.url.includes('deleteMessage'));
+      assert.ok(deleteCall, 'deleteMessage endpoint was invoked');
+      assert.equal(deleteCall.body.chat_id, 12345);
+      assert.equal(deleteCall.body.message_id, 888);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

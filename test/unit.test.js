@@ -17,13 +17,16 @@ import {
   formatPreviousUsersList,
   formatDashboardMessage,
   buildActiveUsersKeyboard,
+  buildSingleUserDeauthKeyboard,
   buildDefaultAuthKeyboard,
   buildUnlimitedKeyboard,
+  formatSingleActiveUserCard,
   formatDisconnectCard,
   TELEGRAM_MENU_KEYBOARD,
   TELEGRAM_INLINE_MENU,
   trackChatMessage,
   deleteTelegramMessages,
+  deleteTelegramMessage,
   clearChatHistory
 } from '../lib/bot-menu.js';
 import { normalizeCommandText } from '../api/webhook.js';
@@ -719,6 +722,84 @@ describe('lib/bot-menu.js Helpers & Formatters', () => {
     assert.equal(defaultKb[0][0].callback_data, 'auth:aa:bb:cc:dd:ee:ff:10');
     assert.equal(defaultKb[2][0].callback_data, 'auth:aa:bb:cc:dd:ee:ff:0');
     assert.equal(defaultKb[2][1].callback_data, 'deauth_aa:bb:cc:dd:ee:ff');
+  });
+
+  test('buildUnlimitedKeyboard strictly contains NO Chinese characters (永久) and uses 🛡️', () => {
+    const kb = buildUnlimitedKeyboard('00:11:22:33:44:55');
+    const permButton = kb.find(row => row[0].callback_data.startsWith('unlim_perm:'))[0];
+    assert.ok(permButton.text.includes('🛡️'));
+    assert.ok(!permButton.text.includes('永久'));
+  });
+
+  test('formatSingleActiveUserCard formats detailed card for an individual active user', () => {
+    const user = {
+      name: 'Tanvir Hossain',
+      mac: '46:84:b7:da:39:73',
+      ip: '192.168.2.229',
+      duration: 30,
+      reviewedAt: '2026-10-14T12:00:00.000Z'
+    };
+
+    const card = formatSingleActiveUserCard(user);
+    assert.ok(card.includes('👤 *ইউজার:* Tanvir Hossain'));
+    assert.ok(card.includes('46:84:b7:da:39:73'));
+    assert.ok(card.includes('192.168.2.229'));
+    assert.ok(card.includes('⏳ 30 মিনিট'));
+    assert.ok(card.includes('_সংযোগ বিচ্ছিন্ন করতে নিচের বাটনে চাপ দিন:_'));
+    assert.ok(!card.includes('永久'));
+
+    // Permanent user
+    const permUser = {
+      name: 'Permanent User',
+      mac: '06:31:5b:7a:aa:e7',
+      ip: '192.168.2.147',
+      duration: 0,
+      mode: 'permanent'
+    };
+    const permCard = formatSingleActiveUserCard(permUser);
+    assert.ok(permCard.includes('🛡️ স্থায়ী বিশ্বস্ত (Permanent)'));
+    assert.ok(!permCard.includes('永久'));
+
+    // Empty user
+    assert.equal(formatSingleActiveUserCard(null), '');
+  });
+
+  test('buildSingleUserDeauthKeyboard generates a single disconnect button for target user', () => {
+    const kb = buildSingleUserDeauthKeyboard('46:84:b7:da:39:73');
+    assert.ok(kb && kb.inline_keyboard);
+    assert.equal(kb.inline_keyboard.length, 1);
+    assert.equal(kb.inline_keyboard[0][0].text, '❌ সংযোগ বিচ্ছিন্ন করুন');
+    assert.equal(kb.inline_keyboard[0][0].callback_data, 'deauth_46:84:b7:da:39:73');
+  });
+
+  test('deleteTelegramMessage safely deletes message and handles errors', async () => {
+    const originalFetch = globalThis.fetch;
+    let requestedUrl = null;
+    let requestPayload = null;
+
+    globalThis.fetch = async (url, opts) => {
+      requestedUrl = String(url);
+      requestPayload = JSON.parse(opts.body);
+      return new Response(JSON.stringify({ ok: true, result: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    };
+
+    try {
+      const res = await deleteTelegramMessage('test-token', 12345, 999);
+      assert.equal(res, true);
+      assert.ok(requestedUrl.includes('deleteMessage'));
+      assert.equal(requestPayload.chat_id, 12345);
+      assert.equal(requestPayload.message_id, 999);
+
+      // Handles null inputs safely
+      assert.equal(await deleteTelegramMessage(null, 123, 456), false);
+      assert.equal(await deleteTelegramMessage('token', null, 456), false);
+      assert.equal(await deleteTelegramMessage('token', 123, null), false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
 

@@ -67,8 +67,20 @@ export default async function handler(req, res) {
       token: redisToken
     });
 
-    // Pop the next command from the head of the queue (FIFO queue)
-    const command = await redis.lpop('pending_commands');
+    const tasks = [redis.lpop('pending_commands')];
+
+    // If router sent the list of physically connected Wi-Fi station MAC addresses,
+    // cache it in Redis with 60s TTL so the Telegram bot displays strictly live devices.
+    const connectedMacsHeader = req.headers['x-router-connected-macs'];
+    if (typeof connectedMacsHeader === 'string') {
+      const liveMacs = connectedMacsHeader
+        .split(',')
+        .map(m => m.trim().toLowerCase().replace(/-/g, ':'))
+        .filter(m => m.length > 0);
+      tasks.push(redis.set('router:live_connected_macs', JSON.stringify(liveMacs), { ex: 60 }));
+    }
+
+    const [command] = await Promise.all(tasks);
 
     return res.status(200).json({
       command: command || null

@@ -27,12 +27,23 @@ if ! command -v uclient-fetch >/dev/null 2>&1 && ! command -v curl >/dev/null 2>
 fi
 ! command -v ndsctl >/dev/null 2>&1 && log "WARN" "'ndsctl' not in PATH. Dry-run mode active."
 
+get_connected_macs() {
+    _macs=""
+    if command -v iw >/dev/null 2>&1; then
+        for _dev in $(iw dev 2>/dev/null | awk '$1=="Interface"{print $2}'); do
+            _dev_macs=$(iw dev "$_dev" station dump 2>/dev/null | awk '$1=="Station"{printf "%s,", tolower($2)}')
+            _macs="${_macs}${_dev_macs}"
+        done
+        printf '%s' "$_macs" | sed 's/,$//'
+    fi
+}
+
 http_get() {
-    _url="$1"
+    _url="$1"; _macs="$2"
     if command -v uclient-fetch >/dev/null 2>&1; then
-        uclient-fetch -q --timeout=10 --header="x-router-secret: $ROUTER_SECRET_KEY" --header="Accept: application/json, text/plain" -O - "$_url" 2>/dev/null
+        uclient-fetch -q --timeout=10 --header="x-router-secret: $ROUTER_SECRET_KEY" --header="x-router-connected-macs: $_macs" --header="Accept: application/json, text/plain" -O - "$_url" 2>/dev/null
     elif command -v curl >/dev/null 2>&1; then
-        curl -s -f -m 10 -H "x-router-secret: $ROUTER_SECRET_KEY" -H "Accept: application/json, text/plain" "$_url" 2>/dev/null
+        curl -s -f -m 10 -H "x-router-secret: $ROUTER_SECRET_KEY" -H "x-router-connected-macs: $_macs" -H "Accept: application/json, text/plain" "$_url" 2>/dev/null
     fi
 }
 
@@ -154,7 +165,8 @@ _loop_count=0
 _report_interval="${REPORT_INTERVAL:-30}"
 
 while true; do
-    resp=$(http_get "$API_URL")
+    _connected_macs=$(get_connected_macs)
+    resp=$(http_get "$API_URL" "$_connected_macs")
     _err=$?
 
     if [ $_err -ne 0 ]; then

@@ -22,9 +22,11 @@ import {
   isUserActive,
   formatUserDetailsList,
   formatActiveUsersList,
+  formatSingleActiveUserCard,
   formatPreviousUsersList,
   formatDashboardMessage,
   buildActiveUsersKeyboard,
+  buildSingleUserDeauthKeyboard,
   buildDefaultAuthKeyboard,
   buildUnlimitedKeyboard,
   TELEGRAM_MENU_KEYBOARD,
@@ -33,7 +35,8 @@ import {
   cleanTerminatedRecords,
   registerBotCommands,
   trackChatMessage,
-  clearChatHistory
+  clearChatHistory,
+  deleteTelegramMessage
 } from '../lib/bot-menu.js';
 
 /**
@@ -391,11 +394,68 @@ export async function editTelegramMessageText(botToken, chatId, messageId, text,
 export async function processMenuCommand(command, redis, botToken = null, chatId = null, currentMsgId = null) {
   // Active users view (and dashboard redirection)
   if (command === 'active' || command === 'dashboard') {
+    let liveMacs = null;
+    try {
+      const rawLiveMacs = await redis.get('router:live_connected_macs');
+      if (rawLiveMacs) {
+        const parsed = typeof rawLiveMacs === 'string' ? JSON.parse(rawLiveMacs) : rawLiveMacs;
+        if (Array.isArray(parsed)) {
+          liveMacs = new Set(parsed.map(m => String(m).toLowerCase().replace(/-/g, ':')));
+        }
+      }
+    } catch (e) {
+      console.warn('[Live MACs Parse Error]', e);
+    }
+
     const [users, pendingQueueCount] = await Promise.all([
       fetchUserRecords(redis),
       redis.llen('pending_commands').catch(() => 0)
     ]);
-    const activeUsers = users.filter(u => isUserActive(u));
+
+    const activeUsers = users.filter(u => {
+      if (!isUserActive(u)) return false;
+      if (liveMacs) {
+        return liveMacs.has((u.mac || '').toLowerCase().replace(/-/g, ':'));
+      }
+      return true;
+    });
+
+    // If active users exist and bot credentials provided, send individual message cards
+    if (botToken && chatId && activeUsers.length > 0) {
+      const tz = process.env.APP_TIMEZONE || 'Asia/Dhaka';
+      const now = new Date().toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true,
+        timeZone: tz
+      }) + (tz === 'Asia/Dhaka' ? ' BST' : '');
+
+      const summaryHeader = [
+        '🟢 *সক্রিয় নেটওয়ার্ক ইউজার (Active Wi-Fi Users)*',
+        '━━━━━━━━━━━━━━━━━━━━',
+        `📊 *নেটওয়ার্ক স্ট্যাটাস:* 🟢 সচল | *পেন্ডিং কিউ:* ${Number(pendingQueueCount) || 0} টি`,
+        `👥 *মোট কানেক্টেড ইউজার:* ${activeUsers.length} জন`,
+        `⏰ *সর্বশেষ লাইভ আপডেট:* ${now}`,
+        '━━━━━━━━━━━━━━━━━━━━',
+        '_নিচে প্রতিটি সক্রিয় ইউজারের আলাদা কার্ড ও সংযোগ বিচ্ছিন্ন করার বাটন দেওয়া হলো:_'
+      ].join('\n');
+
+      await sendTelegramMessage(botToken, chatId, summaryHeader, null, redis);
+
+      for (const u of activeUsers.slice(0, 15)) {
+        const cardText = formatSingleActiveUserCard(u);
+        const cardKeyboard = buildSingleUserDeauthKeyboard(u.mac);
+        await sendTelegramMessage(botToken, chatId, cardText, cardKeyboard, redis);
+      }
+
+      return {
+        text: null,
+        replyMarkup: null,
+        ackText: `🟢 অ্যাক্টিভ ইউজার: ${activeUsers.length} জন`
+      };
+    }
+
     const text = formatActiveUsersList(activeUsers, Number(pendingQueueCount) || 0);
     const activeKeyboard = buildActiveUsersKeyboard(activeUsers);
 
@@ -611,7 +671,7 @@ export default async function handler(req, res) {
           '━━━━━━━━━━━━━━━━━━━━',
           'নিচের কোন মোডে ইউজারকে আনলিমিটেড অ্যাক্সেস দিতে চান?',
           '• *🔄 এককালীন:* এই সেশনের জন্য আনলিমিটেড, কিন্তু সংযোগ বিচ্ছিন্ন হলে আবার লগইন পেজ আসবে।',
-          '• *永久 স্থায়ী বিশ্বস্ত:* রাউটারে বিশ্বস্ত হিসেবে সংরক্ষিত থাকবে, লগইন পেজ আর কখনোই আসবে না।'
+          '• *🛡️ স্থায়ী বিশ্বস্ত:* রাউটারে বিশ্বস্ত হিসেবে সংরক্ষিত থাকবে, লগইন পেজ আর কখনোই আসবে না।'
         ].join('\n');
 
         await sendTelegramMessage(
@@ -635,7 +695,7 @@ export default async function handler(req, res) {
       if (action === 'auth') {
         if (mode === 'permanent') {
           command = `ndsctl trust ${mac}`;
-          statusNotice = `✅ *Status:* Authorized (永久 স্থায়ী বিশ্বস্ত / Permanent Trusted) by ${safeAdminName}`;
+          statusNotice = `✅ *Status:* Authorized (🛡️ স্থায়ী বিশ্বস্ত / Permanent Trusted) by ${safeAdminName}`;
           confirmText = `✅ *অনুমোদন সম্পন্ন:* \`${mac}\` কে *স্থায়ী বিশ্বস্ত (Permanent Trusted)* তালিকায় যুক্ত করা হয়েছে। (লগইন পেজ আর কখনোই আসবে না)`;
         } else if (duration === 0) {
           command = `ndsctl auth ${mac} 0`;
@@ -731,7 +791,9 @@ export default async function handler(req, res) {
         chatId,
         currentMsgId
       );
-      await sendTelegramMessage(botToken, chatId, text, replyMarkup, redis);
+      if (text) {
+        await sendTelegramMessage(botToken, chatId, text, replyMarkup, redis);
+      }
       return res.status(200).json({ ok: true, command: recognizedCommand });
     }
 
@@ -785,7 +847,7 @@ export default async function handler(req, res) {
     );
     await answerCallbackQuery(botToken, callbackQueryId, ackText || '✅ সম্পন্ন হয়েছে', false);
 
-    if (cbChatId) {
+    if (cbChatId && text) {
       // Send fresh response with updated view
       await sendTelegramMessage(botToken, cbChatId, text, replyMarkup, redis);
     }
@@ -822,7 +884,7 @@ export default async function handler(req, res) {
   if (action === 'unlim_perm') {
     command = `ndsctl trust ${mac}`;
     ackMessage = `✅ স্থায়ী বিশ্বস্ত অনুমোদিত (${mac})`;
-    statusNotice = `✅ *Status:* Authorized (永久 স্থায়ী বিশ্বস্ত / Permanent Trusted) by ${safeAdminName}`;
+    statusNotice = `✅ *Status:* Authorized (🛡️ স্থায়ী বিশ্বস্ত / Permanent Trusted) by ${safeAdminName}`;
     confirmText = `✅ *অনুমোদন সম্পন্ন:* \`${mac}\` কে *স্থায়ী বিশ্বস্ত (Permanent Trusted)* তালিকায় যুক্ত করা হয়েছে। (লগইন পেজ আর কখনোই আসবে না)`;
     inlineKeyboard = [
       [
@@ -878,22 +940,20 @@ export default async function handler(req, res) {
     // 3. Clear Telegram client spinner
     await answerCallbackQuery(botToken, callbackQueryId, ackMessage, false);
 
-    // 4. Update the original notification message or refresh active users list in-place
-    if (action === 'deauth' && cbMessage?.text && (cbMessage.text.includes('সক্রিয়') || cbMessage.text.includes('Active'))) {
-      const [updatedUsers, pendingQueue] = await Promise.all([
-        fetchUserRecords(redis),
-        redis.llen('pending_commands').catch(() => 0)
-      ]);
-      const updatedActive = updatedUsers.filter(u => isUserActive(u));
-      const updatedText = formatActiveUsersList(updatedActive, Number(pendingQueue) || 0);
-      const updatedKeyboard = buildActiveUsersKeyboard(updatedActive);
-      await editTelegramMessageText(
-        botToken,
-        cbChatId,
-        cbMessage.message_id,
-        updatedText,
-        updatedKeyboard ? updatedKeyboard.inline_keyboard : []
-      );
+    // 4. Update the original notification message or delete card if terminating an active user
+    if (action === 'deauth') {
+      const msgText = cbMessage?.text || '';
+      const isCardFromActiveList = msgText.includes('সক্রিয়') ||
+        msgText.includes('Active') ||
+        msgText.includes('অনুমোদিত মেয়াদ') ||
+        msgText.includes('কানেক্টেড সময়') ||
+        msgText.includes('সংযোগ বিচ্ছিন্ন করতে নিচের বাটনে চাপ দিন');
+
+      if (isCardFromActiveList && cbMessage?.message_id && cbChatId) {
+        await deleteTelegramMessage(botToken, cbChatId, cbMessage.message_id);
+      } else {
+        await updateTelegramMessage(botToken, cbMessage, statusNotice, inlineKeyboard);
+      }
     } else {
       await updateTelegramMessage(botToken, cbMessage, statusNotice, inlineKeyboard);
     }
