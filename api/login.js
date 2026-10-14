@@ -130,11 +130,16 @@ export default async function handler(req, res) {
       cleanIp ? `🌐 *IP:* \`${escapeMarkdown(cleanIp)}\`` : null,
       `⏰ *Timestamp:* ${timestamp} (${tzSuffix})`,
       '━━━━━━━━━━━━━━━━━━━━',
-      'Select access duration below to authorize via router:'
+      'Select duration below or reply with custom minutes (e.g. 15):'
     ].filter(Boolean).join('\n');
 
     const replyMarkup = {
       inline_keyboard: [
+        [
+          { text: '⏱ 10 Mins', callback_data: `auth:${cleanMac}:10` },
+          { text: '⏱ 15 Mins', callback_data: `auth:${cleanMac}:15` },
+          { text: '⏱ 20 Mins', callback_data: `auth:${cleanMac}:20` }
+        ],
         [
           { text: '⏱ 30 Mins', callback_data: `auth:${cleanMac}:30` },
           { text: '⏱ 1 Hour', callback_data: `auth:${cleanMac}:60` }

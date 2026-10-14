@@ -94,6 +94,90 @@ export function parseCallbackData(data) {
 }
 
 /**
+ * Converts Bengali numerical digits (০-৯) to standard Arabic digits (0-9).
+ *
+ * @param {string} str
+ * @returns {string}
+ */
+export function normalizeDigits(str) {
+  if (!str) return '';
+  const bnDigits = ['০', '১', '২', '৩', '৪', '৫', '৬', '৭', '৮', '৯'];
+  return str.replace(/[০-৯]/g, d => bnDigits.indexOf(d).toString());
+}
+
+/**
+ * Parses custom authorization commands or reply-to-message minutes from Telegram text.
+ * Supports:
+ *  - Direct commands: "/auth <mac> <duration>", "/auth <mac>", "/deauth <mac>"
+ *  - Reply to request cards with minutes: "10", "15", "20", "45", "10m", "15 mins", "15 মিনিট", "১৫", "/auth 15"
+ *  - Reply to request cards with hours: "1h", "2h", "1.5h", "1 hour", "২ ঘন্টা"
+ *  - Reply to request cards with reject: "reject", "cancel", "deauth", "বাতিল", "না", "❌"
+ *  - Reply to request cards with unlimited: "0", "unlimited", "স্থায়ী", "আনলিমিটেড", "♾"
+ *
+ * @param {string} text - User message text
+ * @param {string} [replyToText] - Text of the message being replied to (if any)
+ * @returns {{ action: 'auth'|'deauth', mac: string, duration?: number|null } | null}
+ */
+export function parseCustomAuthMessage(text, replyToText = null) {
+  if (!text || typeof text !== 'string') return null;
+  const rawTrimmed = text.trim();
+  const trimmed = normalizeDigits(rawTrimmed);
+
+  // 1. Direct command: /auth <mac> [duration] or /deauth <mac>
+  const directAuth = trimmed.match(/^\/(?:auth|approve)\s+((?:[0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2})(?:\s+(\d+))?/i);
+  if (directAuth) {
+    const mac = directAuth[1].toLowerCase().replace(/-/g, ':');
+    const duration = directAuth[2] !== undefined ? parseInt(directAuth[2], 10) : 60;
+    return { action: 'auth', mac, duration };
+  }
+
+  const directDeauth = trimmed.match(/^\/(?:deauth|reject|kick)\s+((?:[0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2})/i);
+  if (directDeauth) {
+    const mac = directDeauth[1].toLowerCase().replace(/-/g, ':');
+    return { action: 'deauth', mac, duration: null };
+  }
+
+  // 2. Reply-to-message logic
+  if (replyToText && typeof replyToText === 'string') {
+    const macMatch = replyToText.match(/([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}/);
+    if (macMatch) {
+      const mac = macMatch[0].toLowerCase().replace(/-/g, ':');
+
+      // Check if reply is a rejection
+      if (/^(?:reject|cancel|deauth|kick|no|বাতিল|না|❌)$/i.test(trimmed) || /^\/(?:reject|deauth|cancel)$/i.test(trimmed)) {
+        return { action: 'deauth', mac, duration: null };
+      }
+
+      // Check if reply is unlimited
+      if (/^(?:unlimited|unlimit|0|স্থায়ী|আনলিমিটেড|ইনফিনিটি|♾)$/i.test(trimmed) || /^\/unlimited$/i.test(trimmed)) {
+        return { action: 'auth', mac, duration: 0 };
+      }
+
+      // Check if reply is hours: e.g. "1h", "2 hrs", "1 hour", "1.5h", "২ ঘন্টা"
+      const hourMatch = trimmed.match(/^(?:\/auth\s+)?(\d+(?:\.\d+)?)\s*(?:h|hr|hrs|hour|hours|ঘণ্টা|ঘন্টা)$/i);
+      if (hourMatch) {
+        const hours = parseFloat(hourMatch[1]);
+        if (!isNaN(hours) && hours > 0) {
+          const duration = Math.round(hours * 60);
+          return { action: 'auth', mac, duration };
+        }
+      }
+
+      // Check if reply is a duration number: e.g. "15", "10m", "20 mins", "30 minutes", "/auth 15", "15 মিনিট", "১৫"
+      const numberMatch = trimmed.match(/^(?:\/auth\s+)?(\d+)(?:\s*(?:m|min|mins|minute|minutes|মিনিট))?$/i);
+      if (numberMatch) {
+        const duration = parseInt(numberMatch[1], 10);
+        if (!isNaN(duration) && duration >= 0) {
+          return { action: 'auth', mac, duration };
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
  * Helper to answer Telegram callback query to dismiss the loading spinner on Telegram UI.
  */
 export async function answerCallbackQuery(botToken, callbackQueryId, text, showAlert = false) {
@@ -156,7 +240,7 @@ export async function updateTelegramMessage(botToken, message, statusText, inlin
     const originalText = message.text || '';
     // Strip the selection prompt if present
     const cleanBaseText = originalText
-      .replace(/\n*Select access duration below to authorize via router:/g, '')
+      .replace(/\n*Select (?:access )?duration below[^\n]*/gi, '')
       .trim();
 
     // Escape Markdown special characters in the base text to prevent Telegram parser errors
@@ -395,6 +479,74 @@ export default async function handler(req, res) {
         '⛔ *অননুমোদিত প্রবেশাধিকার:* আপনি এই ওয়াইফাই অ্যাডমিন বটের অনুমোদিত অ্যাডমিনিস্ট্রেটর নন।'
       );
       return res.status(200).json({ ok: false, error: 'Unauthorized chat.' });
+    }
+
+    // 1.1 Process custom duration authorization or rejection (direct command or reply-to-card)
+    const customAuth = parseCustomAuthMessage(message.text, message.reply_to_message?.text);
+    if (customAuth) {
+      const { action, mac, duration } = customAuth;
+      const adminName = message.from?.first_name || 'Admin';
+      const safeAdminName = escapeMarkdown(adminName);
+      let command = '';
+      let statusNotice = '';
+      let inlineKeyboard = [];
+
+      if (action === 'auth') {
+        command = `ndsctl auth ${mac} ${duration}`;
+        const durationLabel = duration === 0 ? 'Unlimited' : `${duration}m`;
+        statusNotice = `✅ *Status:* Authorized (${durationLabel}) by ${safeAdminName}`;
+        inlineKeyboard = [
+          [
+            { text: '❌ Terminate', callback_data: `deauth_${mac}` }
+          ]
+        ];
+      } else {
+        command = `ndsctl deauth ${mac}`;
+        statusNotice = `❌ *Status:* Terminated / Revoked by ${safeAdminName}`;
+        inlineKeyboard = [];
+      }
+
+      try {
+        // 1. Push command to pending_commands queue for OpenWrt router
+        await redis.rpush('pending_commands', command);
+
+        // 2. Update request state hash in Redis database
+        await redis.hset(`request:${mac}`, {
+          status: action === 'auth' ? 'authorized' : 'terminated',
+          duration: duration ?? 0,
+          reviewedBy: adminName,
+          reviewedAt: new Date().toISOString()
+        });
+
+        // 3. Update original message if this was a reply to a notification card
+        if (message.reply_to_message) {
+          await updateTelegramMessage(botToken, message.reply_to_message, statusNotice, inlineKeyboard);
+        }
+
+        // 4. Send confirmation message to admin chat
+        const durationText = duration === 0 ? 'আনলিমিটেড' : `${duration} মিনিটের জন্য`;
+        const confirmText = action === 'auth'
+          ? `✅ *অনুমোদন সম্পন্ন:* \`${mac}\` কে ${durationText} এক্সেস অনুমোদন দেওয়া হয়েছে এবং রাউটার কিউতে পাঠানো হয়েছে।`
+          : `❌ *সংযোগ বিচ্ছিন্ন:* \`${mac}\` এর এক্সেস বাতিল করা হয়েছে।`;
+
+        await sendTelegramMessage(botToken, chatId, confirmText, null, redis);
+
+        return res.status(200).json({
+          ok: true,
+          action,
+          mac,
+          duration,
+          commandQueued: command
+        });
+      } catch (err) {
+        console.error('[Custom Auth Queue Error]', err);
+        await sendTelegramMessage(
+          botToken,
+          chatId,
+          '⚠️ রাউটার কিউতে কমান্ড যোগ করতে সমস্যা হয়েছে। অনুগ্রহ করে আবার চেষ্টা করুন।'
+        );
+        return res.status(500).json({ error: 'Failed to push command to Redis queue.' });
+      }
     }
 
     const recognizedCommand = normalizeCommandText(message.text);

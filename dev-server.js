@@ -23,6 +23,7 @@ import loginHandler from './api/login.js';
 import pendingAuthHandler from './api/pending-auth.js';
 import confirmAuthHandler from './api/confirm-auth.js';
 import statusHandler from './api/status.js';
+import routerHandler from './api/router.js';
 import { parseFasToken } from './lib/opennds.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -88,6 +89,7 @@ async function parseBody(req) {
 
 // In-memory queue and requests list used for local dev simulation if Upstash Redis credentials are not configured
 const localDevQueue = [];
+globalThis.__localDevQueue = localDevQueue;
 const localDevPendingMacs = ['4a:8b:9c:1d:2e:3f', '6c:7d:8e:9f:0a:1b'];
 const localDevRequests = [
   {
@@ -231,6 +233,11 @@ const server = http.createServer(async (req, res) => {
     console.log(`--------------------------------------\n`);
 
     return res.status(200).json({ success: true, mac: cleanMac, status: 'AUTHENTICATED', simulated: true });
+  }
+
+  if (pathname === '/api/router') {
+    req.body = await parseBody(req);
+    return routerHandler(req, res);
   }
 
   if (pathname === '/api/status') {
@@ -472,6 +479,8 @@ const server = http.createServer(async (req, res) => {
     filePath = path.join(PUBLIC_DIR, 'index.html');
   } else if (pathname === '/admin' || pathname === '/admin.html') {
     filePath = path.join(PUBLIC_DIR, 'admin.html');
+  } else if (pathname === '/router' || pathname === '/router/' || pathname === '/router/index.html') {
+    filePath = path.join(PUBLIC_DIR, 'router', 'index.html');
   } else {
     filePath = path.join(PUBLIC_DIR, pathname);
   }
@@ -504,7 +513,7 @@ const server = http.createServer(async (req, res) => {
   });
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`\n======================================================`);
   console.log(`🚀 Wi-Fi Captive Portal Dev Server running!`);
   console.log(`🌐 Captive Portal URL:     http://localhost:${PORT}`);

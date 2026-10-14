@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { escapeMarkdown, normalizeMac } from '../api/request.js';
-import { parseCallbackData } from '../api/webhook.js';
+import { parseCallbackData, parseCustomAuthMessage, normalizeDigits } from '../api/webhook.js';
 import { parseCallbackData as parseCallbackDataTelegram } from '../api/telegram.js';
 import { timingSafeCompare } from '../api/poll.js';
 import { checkAdminAuth } from '../api/admin.js';
@@ -126,6 +126,131 @@ describe('api/webhook.js Callback Parsing', () => {
 
   test('api/telegram.js correctly aliases parseCallbackData', () => {
     assert.equal(parseCallbackDataTelegram, parseCallbackData);
+  });
+});
+
+describe('api/webhook.js Custom Duration & Message Parsing', () => {
+  const sampleCard = `📶 *New Wi-Fi Access Request*
+━━━━━━━━━━━━━━━━━━━━
+👤 *User:* Sabbir
+🏷 *MAC:* \`aa:bb:cc:dd:ee:ff\`
+🌐 *IP:* \`192.168.2.100\`
+⏰ *Timestamp:* Oct 14, 2026, 7:00:00 PM (BST)
+━━━━━━━━━━━━━━━━━━━━
+Select duration below or reply with custom minutes (e.g. 15):`;
+
+  test('normalizes Bengali digits correctly', () => {
+    assert.equal(normalizeDigits('১৫ মিনিট'), '15 মিনিট');
+    assert.equal(normalizeDigits('০১২৩৪৫৬৭৮৯'), '0123456789');
+  });
+
+  test('parses direct commands with MAC and duration', () => {
+    assert.deepEqual(parseCustomAuthMessage('/auth aa:bb:cc:dd:ee:ff 45'), {
+      action: 'auth',
+      mac: 'aa:bb:cc:dd:ee:ff',
+      duration: 45
+    });
+    assert.deepEqual(parseCustomAuthMessage('/approve AA:BB:CC:DD:EE:FF 120'), {
+      action: 'auth',
+      mac: 'aa:bb:cc:dd:ee:ff',
+      duration: 120
+    });
+    assert.deepEqual(parseCustomAuthMessage('/auth aa:bb:cc:dd:ee:ff'), {
+      action: 'auth',
+      mac: 'aa:bb:cc:dd:ee:ff',
+      duration: 60
+    });
+    assert.deepEqual(parseCustomAuthMessage('/deauth aa:bb:cc:dd:ee:ff'), {
+      action: 'deauth',
+      mac: 'aa:bb:cc:dd:ee:ff',
+      duration: null
+    });
+  });
+
+  test('parses reply-to-card with custom minutes and suffixes', () => {
+    // Plain number
+    assert.deepEqual(parseCustomAuthMessage('15', sampleCard), {
+      action: 'auth',
+      mac: 'aa:bb:cc:dd:ee:ff',
+      duration: 15
+    });
+    assert.deepEqual(parseCustomAuthMessage('10m', sampleCard), {
+      action: 'auth',
+      mac: 'aa:bb:cc:dd:ee:ff',
+      duration: 10
+    });
+    assert.deepEqual(parseCustomAuthMessage('20 mins', sampleCard), {
+      action: 'auth',
+      mac: 'aa:bb:cc:dd:ee:ff',
+      duration: 20
+    });
+    assert.deepEqual(parseCustomAuthMessage('/auth 25', sampleCard), {
+      action: 'auth',
+      mac: 'aa:bb:cc:dd:ee:ff',
+      duration: 25
+    });
+    assert.deepEqual(parseCustomAuthMessage('১৫ মিনিট', sampleCard), {
+      action: 'auth',
+      mac: 'aa:bb:cc:dd:ee:ff',
+      duration: 15
+    });
+  });
+
+  test('parses reply-to-card with hours', () => {
+    assert.deepEqual(parseCustomAuthMessage('1h', sampleCard), {
+      action: 'auth',
+      mac: 'aa:bb:cc:dd:ee:ff',
+      duration: 60
+    });
+    assert.deepEqual(parseCustomAuthMessage('2 hrs', sampleCard), {
+      action: 'auth',
+      mac: 'aa:bb:cc:dd:ee:ff',
+      duration: 120
+    });
+    assert.deepEqual(parseCustomAuthMessage('1.5h', sampleCard), {
+      action: 'auth',
+      mac: 'aa:bb:cc:dd:ee:ff',
+      duration: 90
+    });
+    assert.deepEqual(parseCustomAuthMessage('১ ঘন্টা', sampleCard), {
+      action: 'auth',
+      mac: 'aa:bb:cc:dd:ee:ff',
+      duration: 60
+    });
+  });
+
+  test('parses reply-to-card with unlimited or rejection', () => {
+    assert.deepEqual(parseCustomAuthMessage('unlimited', sampleCard), {
+      action: 'auth',
+      mac: 'aa:bb:cc:dd:ee:ff',
+      duration: 0
+    });
+    assert.deepEqual(parseCustomAuthMessage('0', sampleCard), {
+      action: 'auth',
+      mac: 'aa:bb:cc:dd:ee:ff',
+      duration: 0
+    });
+    assert.deepEqual(parseCustomAuthMessage('আনলিমিটেড', sampleCard), {
+      action: 'auth',
+      mac: 'aa:bb:cc:dd:ee:ff',
+      duration: 0
+    });
+    assert.deepEqual(parseCustomAuthMessage('reject', sampleCard), {
+      action: 'deauth',
+      mac: 'aa:bb:cc:dd:ee:ff',
+      duration: null
+    });
+    assert.deepEqual(parseCustomAuthMessage('বাতিল', sampleCard), {
+      action: 'deauth',
+      mac: 'aa:bb:cc:dd:ee:ff',
+      duration: null
+    });
+  });
+
+  test('returns null when text does not match or reply has no MAC', () => {
+    assert.equal(parseCustomAuthMessage('hello world', sampleCard), null);
+    assert.equal(parseCustomAuthMessage('15', 'No MAC address in this message'), null);
+    assert.equal(parseCustomAuthMessage('', sampleCard), null);
   });
 });
 

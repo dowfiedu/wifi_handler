@@ -2,16 +2,10 @@
 # ==============================================================================
 # OpenWrt openNDS Sync Daemon (router/sync.sh)
 #
-# Periodically polls the Vercel serverless /api/poll endpoint for pending
-# router commands (ndsctl auth / deauth) authorized via the Telegram Bot.
-#
-# Compatibility: POSIX /bin/sh (BusyBox ash on OpenWrt).
+# Periodically polls Vercel /api/poll or /api/pending-auth for commands.
+# Max lines: < 250 (DRY Principle Enforced)
 # ==============================================================================
 
-# ------------------------------------------------------------------------------
-# 1. Configuration & Defaults
-# ------------------------------------------------------------------------------
-# Optionally load configuration from file if present
 [ -f /etc/opennds/sync.conf ] && . /etc/opennds/sync.conf
 [ -f ./sync.conf ] && . ./sync.conf
 
@@ -20,245 +14,195 @@ ROUTER_SECRET_KEY="${ROUTER_SECRET_KEY:-change_this_secret_key}"
 POLL_INTERVAL="${POLL_INTERVAL:-5}"
 LOG_TAG="${LOG_TAG:-opennds-sync}"
 
-# ------------------------------------------------------------------------------
-# 2. Logging Helpers
-# ------------------------------------------------------------------------------
-log_info() {
-    printf "[%s] [INFO] %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$1"
-    if command -v logger >/dev/null 2>&1; then
-        logger -t "$LOG_TAG" "[INFO] $1"
-    fi
+log() {
+    _level="$1"; _msg="$2"
+    printf "[%s] [%s] %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$_level" "$_msg"
+    command -v logger >/dev/null 2>&1 && logger -t "$LOG_TAG" "[$_level] $_msg"
 }
 
-log_warn() {
-    printf "[%s] [WARN] %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >&2
-    if command -v logger >/dev/null 2>&1; then
-        logger -t "$LOG_TAG" "[WARN] $1"
-    fi
-}
-
-log_error() {
-    printf "[%s] [ERROR] %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >&2
-    if command -v logger >/dev/null 2>&1; then
-        logger -t "$LOG_TAG" "[ERROR] $1"
-    fi
-}
-
-# ------------------------------------------------------------------------------
-# 3. Environment & Dependency Checks
-# ------------------------------------------------------------------------------
-if ! command -v curl >/dev/null 2>&1; then
-    log_error "'curl' is required but not installed. Install via: opkg update && opkg install curl"
+# Dependency checks
+if ! command -v uclient-fetch >/dev/null 2>&1 && ! command -v curl >/dev/null 2>&1; then
+    log "ERROR" "'uclient-fetch' or 'curl' required for HTTP communication."
     exit 1
 fi
+! command -v ndsctl >/dev/null 2>&1 && log "WARN" "'ndsctl' not in PATH. Dry-run mode active."
 
-if ! command -v ndsctl >/dev/null 2>&1; then
-    log_warn "'ndsctl' was not found in PATH. Commands will be simulated in dry-run mode if openNDS is not installed."
-fi
-
-# ------------------------------------------------------------------------------
-# 4. JSON Parser Helper
-# Extracts the "command" field from { "command": "..." } or handles null.
-# Prioritizes OpenWrt's native 'jsonfilter', falls back to 'jq', then POSIX 'sed'.
-# ------------------------------------------------------------------------------
-parse_command() {
-    _raw_json="$1"
-
-    if command -v jsonfilter >/dev/null 2>&1; then
-        printf '%s' "$_raw_json" | jsonfilter -e '@.command'
-    elif command -v jq >/dev/null 2>&1; then
-        printf '%s' "$_raw_json" | jq -r '.command // empty'
-    else
-        # Pure POSIX sed extraction
-        # Matches "command": "value" and ignores "command": null
-        printf '%s' "$_raw_json" | sed -n 's/.*"command"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+http_get() {
+    _url="$1"
+    if command -v uclient-fetch >/dev/null 2>&1; then
+        uclient-fetch -q --timeout=10 --header="x-router-secret: $ROUTER_SECRET_KEY" --header="Accept: application/json, text/plain" -O - "$_url" 2>/dev/null
+    elif command -v curl >/dev/null 2>&1; then
+        curl -s -f -m 10 -H "x-router-secret: $ROUTER_SECRET_KEY" -H "Accept: application/json, text/plain" "$_url" 2>/dev/null
     fi
 }
 
-# ------------------------------------------------------------------------------
-# 4b. Pending MAC Parser Helper
-# Extracts MAC address from plain text response or JSON { "mac": "..." }.
-# ------------------------------------------------------------------------------
+http_post() {
+    _url="$1"; _data="$2"; _content_type="${3:-application/x-www-form-urlencoded}"
+    if command -v uclient-fetch >/dev/null 2>&1; then
+        uclient-fetch -q --timeout=5 --header="x-router-secret: $ROUTER_SECRET_KEY" --header="Content-Type: $_content_type" --post-data="$_data" -O - "$_url" >/dev/null 2>&1
+    elif command -v curl >/dev/null 2>&1; then
+        curl -s -m 5 -X POST -H "x-router-secret: $ROUTER_SECRET_KEY" -H "Content-Type: $_content_type" -d "$_data" "$_url" >/dev/null 2>&1
+    fi
+}
+
+# Unified regex parser for command and MAC
+parse_json_field() {
+    _raw="$1"; _field="$2"
+    if command -v jsonfilter >/dev/null 2>&1; then
+        printf '%s' "$_raw" | jsonfilter -e "@.$_field"
+    elif command -v jq >/dev/null 2>&1; then
+        printf '%s' "$_raw" | jq -r ".$_field // empty"
+    else
+        printf '%s' "$_raw" | sed -n "s/.*\"$_field\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p"
+    fi
+}
+
+parse_command() {
+    parse_json_field "$1" "command"
+}
+
 parse_mac() {
     _raw="$1"
-
-    # Direct plain text MAC check
     case "$_raw" in
         [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F])
-            printf '%s' "$_raw"
-            return 0
-            ;;
+            printf '%s' "$_raw"; return 0 ;;
     esac
-
-    # JSON extraction: { "mac": "..." }
-    if command -v jsonfilter >/dev/null 2>&1; then
-        printf '%s' "$_raw" | jsonfilter -e '@.mac'
-    elif command -v jq >/dev/null 2>&1; then
-        printf '%s' "$_raw" | jq -r '.mac // empty'
-    else
-        printf '%s' "$_raw" | sed -n 's/.*"mac"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
-    fi
+    parse_json_field "$_raw" "mac"
 }
 
-# ------------------------------------------------------------------------------
-# 5. Security & Validation Filter
-# Ensures commands strictly match allowed openNDS syntax before execution:
-#  - ndsctl auth <MAC> <minutes>
-#  - ndsctl deauth <MAC>
-# ------------------------------------------------------------------------------
 is_command_safe() {
-    _cmd="$1"
-
-    # Match auth: ndsctl auth xx:xx:xx:xx:xx:xx <numbers>
-    case "$_cmd" in
-        ndsctl\ auth\ [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]\ [0-9]*)
-            return 0
-            ;;
-        ndsctl\ deauth\ [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F])
-            return 0
-            ;;
-        ndsctl\ trust\ [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F])
-            return 0
-            ;;
-        ndsctl\ untrust\ [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F])
-            return 0
-            ;;
-        *)
-            return 1
-            ;;
+    case "$1" in
+        ndsctl\ auth\ [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]\ [0-9]*) return 0 ;;
+        ndsctl\ deauth\ [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]) return 0 ;;
+        ndsctl\ trust\ [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]) return 0 ;;
+        ndsctl\ untrust\ [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]) return 0 ;;
+        "reboot") return 0 ;;
+        "echo 3 > /proc/sys/vm/drop_caches") return 0 ;;
+        uci\ set\ wireless.*.disabled=\'[01]\'\ \&\&\ uci\ commit\ wireless\ \&\&\ wifi\ reload) return 0 ;;
+        uci\ set\ wireless.*.txpower=\'[0-9]*\'\ \&\&\ uci\ commit\ wireless\ \&\&\ wifi\ reload) return 0 ;;
+        uci\ set\ wireless.*.channel=\'[0-9]*\'\ \&\&\ uci\ commit\ wireless\ \&\&\ wifi\ reload) return 0 ;;
+        uci\ set\ wireless.*.htmode=\'*\'\ \&\&\ uci\ commit\ wireless\ \&\&\ wifi\ reload) return 0 ;;
+        uci\ set\ wireless.*.ssid=\'*\'\ \&\&\ uci\ commit\ wireless\ \&\&\ wifi\ reload) return 0 ;;
+        uci\ set\ wireless.*) return 0 ;;
+        uci\ delete\ wireless.*) return 0 ;;
+        iptables\ -I\ FORWARD\ 1\ -m\ mac\ --mac-source\ [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]\ -j\ DROP) return 0 ;;
+        iptables\ -D\ FORWARD\ -m\ mac\ --mac-source\ [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]\ -j\ DROP) return 0 ;;
+        etherwake\ -i\ br-lan\ [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]) return 0 ;;
+        uci\ set\ dhcp.*) return 0 ;;
+        uci\ delete\ dhcp.*) return 0 ;;
+        "for _l in /sys/class/leds/"*) return 0 ;;
+        uci\ set\ firewall.@defaults\[0\].flow_offloading*) return 0 ;;
+        /etc/init.d/firewall\ restart) return 0 ;;
+        uci\ set\ sqm.@queue\[0\].*) return 0 ;;
+        /etc/init.d/sqm\ restart) return 0 ;;
+        ifup\ wg0|ifdown\ wg0) return 0 ;;
+        uci\ set\ mwan3.*) return 0 ;;
+        /etc/init.d/mwan3\ *) return 0 ;;
+        /etc/init.d/https-dns-proxy\ *) return 0 ;;
+        uci\ set\ archer_guard.*) return 0 ;;
+        uci\ commit\ archer_guard*) return 0 ;;
+        wrtbwmon\ *) return 0 ;;
+        *crontabs/root*|/etc/init.d/cron\ restart) return 0 ;;
+        *) return 1 ;;
     esac
 }
 
-# ------------------------------------------------------------------------------
-# 5b. Wi-Fi Client Deauthentication (Layer 2 Disconnect)
-# Immediately kicks the client device from Wi-Fi radios (Layer 2 802.11) via
-# OpenWrt ubus (hostapd), Linux iw, or hostapd_cli.
-# This forces the client device (Android/iOS) to drop Wi-Fi immediately. When
-# the device attempts to reconnect (usually within 1-3 seconds), its OS captive
-# portal detection probe immediately triggers and displays the login screen.
-# ------------------------------------------------------------------------------
 kick_wifi_client() {
-    _target_mac="$1"
-    [ -z "$_target_mac" ] && return 0
-
-    # 1. OpenWrt ubus hostapd client deletion (forces 802.11 deauth frame)
+    _mac="$1"
+    [ -z "$_mac" ] && return 0
     if command -v ubus >/dev/null 2>&1; then
-        for _h_iface in $(ubus list 'hostapd.*' 2>/dev/null); do
-            ubus call "$_h_iface" del_client "{\"addr\":\"$_target_mac\",\"reason\":1,\"deauth\":true}" >/dev/null 2>&1
+        for _h in $(ubus list 'hostapd.*' 2>/dev/null); do
+            ubus call "$_h" del_client "{\"addr\":\"$_mac\",\"reason\":1,\"deauth\":true}" >/dev/null 2>&1
         done
     fi
-
-    # 2. Linux mac80211 iw station deletion fallback
     if command -v iw >/dev/null 2>&1; then
-        for _iw_dev in $(iw dev 2>/dev/null | awk '$1=="Interface"{print $2}'); do
-            iw dev "$_iw_dev" station del "$_target_mac" >/dev/null 2>&1
+        for _dev in $(iw dev 2>/dev/null | awk '$1=="Interface"{print $2}'); do
+            iw dev "$_dev" station del "$_mac" >/dev/null 2>&1
         done
     fi
+}
 
-    # 3. hostapd_cli fallback if available
-    if command -v hostapd_cli >/dev/null 2>&1; then
-        hostapd_cli deauthenticate "$_target_mac" >/dev/null 2>&1
+confirm_auth() {
+    _mac="$1"
+    _url="${CONFIRM_URL:-$(printf '%s' "$API_URL" | sed 's/\(poll\|pending-auth\)/confirm-auth/')}"
+    http_post "$_url" "mac=$_mac" "application/x-www-form-urlencoded"
+    log "INFO" "Confirmed auth for MAC: $_mac"
+}
+
+report_telemetry() {
+    _report_url="${STATUS_URL:-$(printf '%s' "$API_URL" | sed 's/\(poll\|pending-auth\)/router/')}"
+    _metrics=""
+    if [ -f /www/cgi-bin/api ]; then
+        _metrics=$(REQUEST_METHOD=GET QUERY_STRING="action=status" X_ROUTER_SECRET="$ROUTER_SECRET_KEY" sh /www/cgi-bin/api 2>/dev/null | sed -n '/^{/,$p')
+    elif command -v uclient-fetch >/dev/null 2>&1; then
+        _metrics=$(uclient-fetch -q --timeout=3 --header="X-Router-Secret: $ROUTER_SECRET_KEY" -O - "http://127.0.0.1/cgi-bin/api?action=status" 2>/dev/null)
+    elif command -v curl >/dev/null 2>&1; then
+        _metrics=$(curl -s -m 3 -H "X-Router-Secret: $ROUTER_SECRET_KEY" "http://127.0.0.1/cgi-bin/api?action=status" 2>/dev/null)
+    fi
+
+    if [ -n "$_metrics" ] && [ "${_metrics#"{"}" != "$_metrics" ]; then
+        http_post "$_report_url" "{\"action\":\"report_status\",\"status\":$_metrics}" "application/json"
+        log "INFO" "Pushed live router telemetry to Cloud Bridge."
     fi
 }
 
-# ------------------------------------------------------------------------------
-# 6. Signal Handling
-# ------------------------------------------------------------------------------
-cleanup() {
-    log_info "Received termination signal. Stopping openNDS sync daemon."
-    exit 0
-}
-trap cleanup INT TERM
+trap 'log "INFO" "Stopping sync daemon."; exit 0' INT TERM
 
-# ------------------------------------------------------------------------------
-# 7. Main Polling Loop
-# ------------------------------------------------------------------------------
-log_info "Starting openNDS sync service..."
-log_info "Polling endpoint: $API_URL every ${POLL_INTERVAL}s"
+log "INFO" "Starting openNDS sync service on $API_URL (Interval: ${POLL_INTERVAL}s)"
+
+_loop_count=0
+_report_interval="${REPORT_INTERVAL:-30}"
 
 while true; do
-    # Perform HTTP GET poll with timeout and secret authentication header
-    response=$(curl -s -f -m 10 \
-        -H "x-router-secret: $ROUTER_SECRET_KEY" \
-        -H "Accept: application/json, text/plain" \
-        "$API_URL" 2>/dev/null)
-    curl_exit=$?
+    resp=$(http_get "$API_URL")
+    _err=$?
 
-    if [ $curl_exit -ne 0 ]; then
-        log_warn "Poll request failed (curl exit code: $curl_exit). Check network, URL, or x-router-secret."
-    elif [ -n "$response" ]; then
-        # 1. Check for command format from /api/poll
-        target_cmd=$(parse_command "$response")
-
-        if [ -n "$target_cmd" ] && [ "$target_cmd" != "null" ]; then
-            log_info "Received command from queue: $target_cmd"
-
-            # Strict security verification
-            if is_command_safe "$target_cmd"; then
-                if command -v ndsctl >/dev/null 2>&1; then
-                    exec_output=$($target_cmd 2>&1)
-                    exec_code=$?
-                    if [ $exec_code -eq 0 ]; then
-                        log_info "Successfully executed: '$target_cmd' [Output: $exec_output]"
-                    else
-                        log_warn "Command returned error ($exec_code): '$target_cmd' [Output: $exec_output]"
-                    fi
-                else
-                    log_info "[DRY-RUN] Simulating command execution: $target_cmd"
-                fi
-
-                # Post-execution actions for auth / deauth
-                case "$target_cmd" in
-                    ndsctl\ deauth\ *)
-                        _deauth_mac=$(printf '%s' "$target_cmd" | awk '{print $3}')
-                        if [ -n "$_deauth_mac" ]; then
-                            kick_wifi_client "$_deauth_mac"
-                            log_info "Kicked client from Wi-Fi radio for MAC: $_deauth_mac"
+    if [ $_err -ne 0 ]; then
+        log "WARN" "Poll failed (code $_err)."
+    elif [ -n "$resp" ]; then
+        cmd=$(parse_command "$resp")
+        if [ -n "$cmd" ] && [ "$cmd" != "null" ]; then
+            if is_command_safe "$cmd"; then
+                case "$cmd" in
+                    ndsctl\ *)
+                        if command -v ndsctl >/dev/null 2>&1; then
+                            out=$($cmd 2>&1); log "INFO" "Executed: '$cmd' [$out]"
+                        else
+                            log "INFO" "[DRY-RUN] Simulating: $cmd"
                         fi
                         ;;
-                    ndsctl\ auth\ *)
-                        _auth_mac=$(printf '%s' "$target_cmd" | awk '{print $3}')
-                        if [ -n "$_auth_mac" ]; then
-                            confirm_url="${CONFIRM_URL:-$(printf '%s' "$API_URL" | sed 's/poll/confirm-auth/')}"
-                            curl -s -m 5 -X POST \
-                                -H "x-router-secret: $ROUTER_SECRET_KEY" \
-                                -d "mac=$_auth_mac" \
-                                "$confirm_url" >/dev/null 2>&1
-                            log_info "Confirmed authorization with server for MAC: $_auth_mac"
-                        fi
+                    reboot)
+                        log "WARN" "Executing router reboot in 1 second..."
+                        ( sleep 1; reboot ) >/dev/null 2>&1 &
+                        ;;
+                    *)
+                        out=$(eval "$cmd" 2>&1); log "INFO" "Executed: '$cmd' [$out]"
                         ;;
                 esac
+
+                case "$cmd" in
+                    ndsctl\ deauth\ *) kick_wifi_client "$(printf '%s' "$cmd" | awk '{print $3}')" ;;
+                    ndsctl\ auth\ *) confirm_auth "$(printf '%s' "$cmd" | awk '{print $3}')" ;;
+                esac
             else
-                log_error "SECURITY ALERT: Rejected unauthorized or malformed command: '$target_cmd'"
+                log "ERROR" "SECURITY ALERT: Rejected command: '$cmd'"
             fi
         else
-            # 2. Check for direct MAC format from /api/pending-auth
-            target_mac=$(parse_mac "$response")
-
-            if [ -n "$target_mac" ] && [ "$target_mac" != "null" ]; then
-                log_info "Received pending client MAC: $target_mac"
-                auth_cmd="ndsctl auth $target_mac ${DEFAULT_AUTH_DURATION:-0}"
-
-                if command -v ndsctl >/dev/null 2>&1; then
-                    exec_output=$($auth_cmd 2>&1)
-                    log_info "Authorized client: '$target_mac' [Output: $exec_output]"
-                else
-                    log_info "[DRY-RUN] Simulating authentication: $auth_cmd"
-                fi
-
-                # Confirm authentication back to server
-                confirm_url="${CONFIRM_URL:-$(printf '%s' "$API_URL" | sed 's/pending-auth/confirm-auth/')}"
-                if [ "$confirm_url" != "$API_URL" ] || [ -n "$CONFIRM_URL" ]; then
-                    curl -s -m 5 -X POST \
-                        -H "x-router-secret: $ROUTER_SECRET_KEY" \
-                        -d "mac=$target_mac" \
-                        "$confirm_url" >/dev/null 2>&1
-                    log_info "Confirmed authorization for MAC: $target_mac"
-                fi
+            mac=$(parse_mac "$resp")
+            if [ -n "$mac" ] && [ "$mac" != "null" ]; then
+                log "INFO" "Authorizing pending client: $mac"
+                command -v ndsctl >/dev/null 2>&1 && ndsctl auth "$mac" "${DEFAULT_AUTH_DURATION:-0}" >/dev/null 2>&1
+                confirm_auth "$mac"
             fi
         fi
     fi
 
-    # Wait for the next poll cycle
+    # Periodic telemetry reporting
+    _loop_count=$((_loop_count + POLL_INTERVAL))
+    if [ "$_loop_count" -ge "$_report_interval" ]; then
+        _loop_count=0
+        report_telemetry
+    fi
+
     sleep "$POLL_INTERVAL"
 done

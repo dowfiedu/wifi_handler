@@ -10,6 +10,7 @@ import loginHandler from '../api/login.js';
 import pendingAuthHandler from '../api/pending-auth.js';
 import confirmAuthHandler from '../api/confirm-auth.js';
 import statusHandler from '../api/status.js';
+import routerHandler from '../api/router.js';
 
 // Helper mock response factory
 function createMockRes() {
@@ -44,7 +45,7 @@ describe('API Endpoints Validation & Status Codes', () => {
   const originalEnv = { ...process.env };
 
   beforeEach(() => {
-    process.env = { ...originalEnv };
+    process.env = { ...originalEnv, NODE_ENV: 'test' };
   });
 
   afterEach(() => {
@@ -347,6 +348,140 @@ describe('API Endpoints Validation & Status Codes', () => {
         assert.equal(res.statusCode, 200);
         assert.equal(res.body.ok, true);
       }
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('/api/webhook processes custom duration reply to access request card', async () => {
+    process.env.TELEGRAM_BOT_TOKEN = 'test-token';
+    process.env.UPSTASH_REDIS_REST_URL = 'https://mock.upstash.io';
+    process.env.UPSTASH_REDIS_REST_TOKEN = 'mock-token';
+
+    const fetchCalls = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, options) => {
+      fetchCalls.push({ url: String(url), options });
+      if (String(url).includes('upstash.io')) {
+        let count = 1;
+        try {
+          const parsed = JSON.parse(options?.body);
+          if (Array.isArray(parsed)) count = parsed.length;
+        } catch {}
+        const resBody = Array.from({ length: count }, () => ({ result: 1 }));
+        return new Response(JSON.stringify(resBody), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      return new Response(JSON.stringify({ ok: true, result: 1 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    };
+
+    try {
+      const req = {
+        method: 'POST',
+        body: {
+          update_id: 9901,
+          message: {
+            message_id: 501,
+            text: '15',
+            chat: { id: 12345 },
+            from: { first_name: 'AdminUser' },
+            reply_to_message: {
+              message_id: 500,
+              chat: { id: 12345 },
+              text: '📶 New Wi-Fi Access Request\n👤 User: Guest\n🏷 MAC: aa:bb:cc:dd:ee:ff\nSelect duration below or reply with custom minutes (e.g. 15):'
+            }
+          }
+        }
+      };
+      const res = createMockRes();
+      await webhookHandler(req, res);
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.ok, true);
+      assert.equal(res.body.action, 'auth');
+      assert.equal(res.body.duration, 15);
+      assert.equal(res.body.commandQueued, 'ndsctl auth aa:bb:cc:dd:ee:ff 15');
+
+      // Verify original card was updated with editMessageText
+      const editMsgCall = fetchCalls.find(c => c.url.includes('editMessageText'));
+      assert.ok(editMsgCall, 'editMessageText was called on original card');
+      const editBody = JSON.parse(editMsgCall.options.body);
+      assert.equal(editBody.message_id, 500);
+      assert.match(editBody.text, /Authorized \(15m\)/);
+      assert.deepEqual(editBody.reply_markup.inline_keyboard, [
+        [{ text: '❌ Terminate', callback_data: 'deauth_aa:bb:cc:dd:ee:ff' }]
+      ]);
+
+      // Verify confirmation message was sent to admin chat
+      const sendMsgCall = fetchCalls.find(c => c.url.includes('sendMessage'));
+      assert.ok(sendMsgCall, 'sendMessage was called for confirmation');
+      const sendBody = JSON.parse(sendMsgCall.options.body);
+      assert.equal(sendBody.chat_id, 12345);
+      assert.match(sendBody.text, /15 মিনিটের জন্য/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('/api/webhook processes direct /auth command with minutes', async () => {
+    process.env.TELEGRAM_BOT_TOKEN = 'test-token';
+    process.env.UPSTASH_REDIS_REST_URL = 'https://mock.upstash.io';
+    process.env.UPSTASH_REDIS_REST_TOKEN = 'mock-token';
+
+    const fetchCalls = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, options) => {
+      fetchCalls.push({ url: String(url), options });
+      if (String(url).includes('upstash.io')) {
+        let count = 1;
+        try {
+          const parsed = JSON.parse(options?.body);
+          if (Array.isArray(parsed)) count = parsed.length;
+        } catch {}
+        const resBody = Array.from({ length: count }, () => ({ result: 1 }));
+        return new Response(JSON.stringify(resBody), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      return new Response(JSON.stringify({ ok: true, result: 1 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    };
+
+    try {
+      const req = {
+        method: 'POST',
+        body: {
+          update_id: 9902,
+          message: {
+            message_id: 502,
+            text: '/auth 00:11:22:33:44:55 45',
+            chat: { id: 12345 },
+            from: { first_name: 'SuperAdmin' }
+          }
+        }
+      };
+      const res = createMockRes();
+      await webhookHandler(req, res);
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.ok, true);
+      assert.equal(res.body.action, 'auth');
+      assert.equal(res.body.mac, '00:11:22:33:44:55');
+      assert.equal(res.body.duration, 45);
+      assert.equal(res.body.commandQueued, 'ndsctl auth 00:11:22:33:44:55 45');
+
+      const sendMsgCall = fetchCalls.find(c => c.url.includes('sendMessage'));
+      assert.ok(sendMsgCall, 'sendMessage was called');
+      const sendBody = JSON.parse(sendMsgCall.options.body);
+      assert.match(sendBody.text, /45 মিনিটের জন্য/);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -785,5 +920,345 @@ describe('API Endpoints Validation & Status Codes', () => {
     assert.equal(res.statusCode, 200);
     assert.equal(res.body.mac, 'aa:bb:cc:dd:ee:ff');
     assert.equal(res.body.status, 'pending');
+  });
+
+  test('/api/router OPTIONS returns 200 with status ok', async () => {
+    const req = { method: 'OPTIONS' };
+    const res = createMockRes();
+
+    await routerHandler(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.status, 'ok');
+  });
+
+  test('/api/router rejects unsupported HTTP methods with 405', async () => {
+    const req = { method: 'DELETE' };
+    const res = createMockRes();
+
+    await routerHandler(req, res);
+
+    assert.equal(res.statusCode, 405);
+    assert.match(res.body.error, /Method DELETE Not Allowed/);
+  });
+
+  test('/api/router GET returns simulated Archer C6 status when Redis is not configured', async () => {
+    delete process.env.UPSTASH_REDIS_REST_URL;
+    delete process.env.UPSTASH_REDIS_REST_TOKEN;
+    delete globalThis.__localRouterStatus;
+
+    const req = { method: 'GET', headers: {} };
+    const res = createMockRes();
+
+    await routerHandler(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.source, 'cloud_bridge');
+    assert.equal(res.body.cpu.model, 'MediaTek MT7621DAT @ 880MHz');
+    assert.equal(res.body.memory.total_kb, 131072);
+    assert.equal(res.body.storage.total_kb, 16384);
+    assert.equal(res.body.ports.wan.speed_mbps, 1000);
+    assert.equal(res.body.wireless.radio_2g.band, '2.4GHz');
+    assert.equal(res.body.wireless.radio_5g.band, '5GHz');
+    assert.equal(res.body.network.hw_offload.enabled, true);
+    assert.equal(res.body.network.sqm.qdisc, 'cake');
+    assert.equal(res.body.network.wireguard.interface, 'wg0');
+    assert.equal(res.body.network.multi_wan.enabled, false);
+    assert.equal(res.body.network.doh.enabled, true);
+    assert.equal(res.body.analytics.quota.total_gb, 50);
+    assert.equal(res.body.analytics.quota.wrtbwmon_active, true);
+    assert.equal(Array.isArray(res.body.analytics.wrtbwmon_clients), true);
+    assert.equal(res.body.crontab.midnight_reboot.enabled, true);
+    assert.equal(res.body.crontab.wifi_sleep.enabled, true);
+    assert.equal(res.body.smart_home.home_assistant.enabled, true);
+    assert.equal(Array.isArray(res.body.clients), true);
+    assert.equal(typeof res.body.timestamp, 'number');
+  });
+
+  test('/api/router GET rejects invalid x-router-secret when secret is configured', async () => {
+    process.env.ROUTER_SECRET_KEY = 'super_secret_key';
+
+    const req = {
+      method: 'GET',
+      headers: { 'x-router-secret': 'wrong_secret' }
+    };
+    const res = createMockRes();
+
+    await routerHandler(req, res);
+
+    assert.equal(res.statusCode, 401);
+    assert.match(res.body.error, /Unauthorized/);
+  });
+
+  test('/api/router POST rejects unauthorized requests when ROUTER_SECRET_KEY is configured', async () => {
+    process.env.ROUTER_SECRET_KEY = 'super_secret_key';
+
+    const req = {
+      method: 'POST',
+      headers: {},
+      body: { command: 'reboot' }
+    };
+    const res = createMockRes();
+
+    await routerHandler(req, res);
+
+    assert.equal(res.statusCode, 401);
+    assert.match(res.body.error, /Unauthorized/);
+  });
+
+  test('/api/router POST rejects missing or empty command with 400', async () => {
+    process.env.ROUTER_SECRET_KEY = 'test_secret';
+
+    const req = {
+      method: 'POST',
+      headers: { 'x-router-secret': 'test_secret' },
+      body: {}
+    };
+    const res = createMockRes();
+
+    await routerHandler(req, res);
+
+    assert.equal(res.statusCode, 400);
+    assert.match(res.body.error, /Field "command" is required/);
+  });
+
+  test('/api/router POST rejects unsupported command with 400', async () => {
+    process.env.ROUTER_SECRET_KEY = 'test_secret';
+
+    const req = {
+      method: 'POST',
+      headers: { 'x-router-secret': 'test_secret' },
+      body: { command: 'rm_everything' }
+    };
+    const res = createMockRes();
+
+    await routerHandler(req, res);
+
+    assert.equal(res.statusCode, 400);
+    assert.match(res.body.error, /Unsupported command/);
+  });
+
+  test('/api/router POST rejects invalid MAC address for client commands with 400', async () => {
+    process.env.ROUTER_SECRET_KEY = 'test_secret';
+
+    const req = {
+      method: 'POST',
+      headers: { 'x-router-secret': 'test_secret' },
+      body: { command: 'block_client', target: 'not-a-mac' }
+    };
+    const res = createMockRes();
+
+    await routerHandler(req, res);
+
+    assert.equal(res.statusCode, 400);
+    assert.match(res.body.error, /Valid target MAC address required/);
+  });
+
+  test('/api/router POST enqueues valid hardware commands (reboot, drop_caches, wifi_toggle, block_client, etc.)', async () => {
+    process.env.ROUTER_SECRET_KEY = 'test_secret';
+    globalThis.__localDevQueue = [];
+
+    const testCases = [
+      {
+        body: { command: 'reboot' },
+        expectedCmd: 'reboot'
+      },
+      {
+        body: { command: 'drop_caches' },
+        expectedCmd: 'echo 3 > /proc/sys/vm/drop_caches'
+      },
+      {
+        body: { command: 'wifi_toggle', target: 'radio0', value: 'off' },
+        expectedCmd: "uci set wireless.radio0.disabled='1' && uci commit wireless && wifi reload"
+      },
+      {
+        body: { command: 'set_txpower', target: 'radio1', value: '23' },
+        expectedCmd: "uci set wireless.radio1.txpower='23' && uci commit wireless && wifi reload"
+      },
+      {
+        body: { command: 'set_wifi_channel', target: 'radio0', value: '6' },
+        expectedCmd: "uci set wireless.radio0.channel='6' && uci commit wireless && wifi reload"
+      },
+      {
+        body: { command: 'set_wifi_htmode', target: 'radio0', value: 'HT40' },
+        expectedCmd: "uci set wireless.radio0.htmode='HT40' && uci commit wireless && wifi reload"
+      },
+      {
+        body: { command: 'set_wifi_ssid', target: 'default_radio0', value: 'Archer_C6_2.4G' },
+        expectedCmd: "uci set wireless.default_radio0.ssid='Archer_C6_2.4G' && uci commit wireless && wifi reload"
+      },
+      {
+        body: { command: 'guest_wifi_toggle', target: 'guest', value: 'on' },
+        expectedCmd: "uci set wireless.guest.disabled='0' && uci commit wireless && wifi reload"
+      },
+      {
+        body: { command: 'set_wifi_advanced', target: 'roaming', value: '1' },
+        expectedCmd: "uci set wireless.@wifi-iface[0].roaming='1' && uci commit wireless && wifi reload"
+      },
+      {
+        body: { command: 'block_client', target: '00:11:22:33:44:55' },
+        expectedCmd: 'iptables -I FORWARD 1 -m mac --mac-source 00:11:22:33:44:55 -j DROP'
+      },
+      {
+        body: { command: 'unblock_client', target: '00:11:22:33:44:55' },
+        expectedCmd: 'iptables -D FORWARD -m mac --mac-source 00:11:22:33:44:55 -j DROP'
+      },
+      {
+        body: { command: 'nds_auth', target: '00:11:22:33:44:55', value: 60 },
+        expectedCmd: 'ndsctl auth 00:11:22:33:44:55 60'
+      },
+      {
+        body: { command: 'nds_deauth', target: '00:11:22:33:44:55' },
+        expectedCmd: 'ndsctl deauth 00:11:22:33:44:55'
+      },
+      {
+        body: { command: 'wol', target: '00:11:22:33:44:55' },
+        expectedCmd: 'etherwake -i br-lan 00:11:22:33:44:55'
+      },
+      {
+        body: { command: 'set_static_lease', target: '00:11:22:33:44:55', value: '192.168.1.50' },
+        expectedCmd: "uci set dhcp.host_001122334455=host && uci set dhcp.host_001122334455.mac='00:11:22:33:44:55' && uci set dhcp.host_001122334455.ip='192.168.1.50' && uci commit dhcp"
+      },
+      {
+        body: { command: 'del_static_lease', target: '00:11:22:33:44:55' },
+        expectedCmd: "uci delete dhcp.host_001122334455 && uci commit dhcp"
+      },
+      {
+        body: { command: 'led_stealth', value: 'off' },
+        expectedCmd: 'for _l in /sys/class/leds/*; do [ -d "$_l" ] && echo 0 > "$_l/brightness" 2>/dev/null; done'
+      },
+      {
+        body: { command: 'set_hw_offload', value: '1' },
+        expectedCmd: "uci set firewall.@defaults[0].flow_offloading='1' && uci set firewall.@defaults[0].flow_offloading_hw='1' && uci commit firewall && /etc/init.d/firewall restart"
+      },
+      {
+        body: { command: 'set_sqm', value: '1' },
+        expectedCmd: "uci set sqm.@queue[0].enabled='1' && uci commit sqm && /etc/init.d/sqm restart"
+      },
+      {
+        body: { command: 'set_sqm_limits', target: 'cake', value: { download: 95000, upload: 20000 } },
+        expectedCmd: "uci set sqm.@queue[0].qdisc='cake' && uci set sqm.@queue[0].download='95000' && uci set sqm.@queue[0].upload='20000' && uci commit sqm && /etc/init.d/sqm restart"
+      },
+      {
+        body: { command: 'set_wireguard', value: 'on' },
+        expectedCmd: 'ifup wg0'
+      },
+      {
+        body: { command: 'set_wireguard', value: 'off' },
+        expectedCmd: 'ifdown wg0'
+      },
+      {
+        body: { command: 'set_multiwan', value: '1' },
+        expectedCmd: "uci set mwan3.globals.enabled='1' && uci commit mwan3 && /etc/init.d/mwan3 restart"
+      },
+      {
+        body: { command: 'set_doh', value: '1' },
+        expectedCmd: '/etc/init.d/https-dns-proxy start'
+      },
+      {
+        body: { command: 'raw_cmd', value: 'ping -c 4 8.8.8.8' },
+        expectedCmd: 'ping -c 4 8.8.8.8'
+      },
+      {
+        body: { command: 'set_quota', value: 50, reset_day: 1, warning_percent: 80 },
+        expectedCmd: "uci set archer_guard.quota=section && uci set archer_guard.quota.total_gb='50' && uci set archer_guard.quota.reset_day='1' && uci set archer_guard.quota.warn_pct='80' && uci commit archer_guard"
+      },
+      {
+        body: { command: 'reset_quota' },
+        expectedCmd: 'wrtbwmon reset || rm -f /tmp/usage.db /tmp/wrtbwmon/usage.db'
+      },
+      {
+        body: { command: 'set_client_quota', target: '00:11:22:33:44:55', value: 20 },
+        expectedCmd: "uci set archer_guard.quota_001122334455='20' && uci commit archer_guard"
+      },
+      {
+        body: { command: 'toggle_cron_task', target: 'midnight_reboot', value: '1' },
+        expectedCmd: "echo '0 4 * * * /sbin/reboot' >> /etc/crontabs/root && /etc/init.d/cron restart"
+      },
+      {
+        body: { command: 'toggle_cron_task', target: 'wifi_sleep', value: '1' },
+        expectedCmd: "echo '0 1 * * * /sbin/wifi down' >> /etc/crontabs/root && echo '0 7 * * * /sbin/wifi up' >> /etc/crontabs/root && /etc/init.d/cron restart"
+      },
+      {
+        body: { command: 'set_homeassistant_webhook', value: 'http://ha.local:8123/webhook' },
+        expectedCmd: "uci set archer_guard.ha=section && uci set archer_guard.ha.enabled='1' && uci set archer_guard.ha.webhook='http://ha.local:8123/webhook' && uci commit archer_guard"
+      },
+      {
+        body: { command: 'trigger_ha_webhook', target: '00:11:22:33:44:55', value: 'connected' },
+        expectedCmd: "curl -s -m 3 -X POST -H 'Content-Type: application/json' -d '{\"device\":\"archer_c6\",\"mac\":\"00:11:22:33:44:55\",\"state\":\"connected\"}' 'http://homeassistant.local:8123/api/webhook/archer_c6_presence'"
+      }
+    ];
+
+    for (const tc of testCases) {
+      const req = {
+        method: 'POST',
+        headers: { 'x-router-secret': 'test_secret' },
+        body: tc.body
+      };
+      const res = createMockRes();
+
+      await routerHandler(req, res);
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.success, true);
+      assert.equal(res.body.routerCmd, tc.expectedCmd);
+    }
+
+    assert.equal(globalThis.__localDevQueue.length, testCases.length);
+  });
+
+  test('/api/router POST executes raw_cmd and returns simulated diagnostic output', async () => {
+    process.env.ROUTER_SECRET_KEY = 'test_secret';
+
+    const commands = ['ping 8.8.8.8', 'traceroute 1.1.1.1', 'iwinfo wlan0', 'iwinfo wlan1', 'logread -l 30', 'dmesg', 'cat /proc/cpuinfo', 'free -m', 'df -h', 'uptime'];
+
+    for (const cmd of commands) {
+      const req = {
+        method: 'POST',
+        headers: { 'x-router-secret': 'test_secret' },
+        body: { command: 'raw_cmd', value: cmd }
+      };
+      const res = createMockRes();
+      await routerHandler(req, res);
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.success, true);
+      assert.equal(res.body.command, 'raw_cmd');
+      assert.ok(typeof res.body.output === 'string');
+      assert.ok(res.body.output.length > 0);
+    }
+  });
+
+  test('/api/router POST accepts report_status action and caches telemetry', async () => {
+    process.env.ROUTER_SECRET_KEY = 'test_secret';
+
+    const mockTelemetry = {
+      cpu: { load_avg: '0.05, 0.08, 0.02' },
+      memory: { total_kb: 131072, free_kb: 60000 },
+      source: 'live_router_test'
+    };
+
+    const req = {
+      method: 'POST',
+      headers: { 'x-router-secret': 'test_secret' },
+      body: {
+        action: 'report_status',
+        status: mockTelemetry
+      }
+    };
+    const res = createMockRes();
+
+    await routerHandler(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.status, 'ok');
+    assert.deepEqual(globalThis.__localRouterStatus, mockTelemetry);
+
+    // Verify GET now returns this cached status
+    const reqGet = { method: 'GET', headers: {} };
+    const resGet = createMockRes();
+    await routerHandler(reqGet, resGet);
+    assert.equal(resGet.statusCode, 200);
+    assert.equal(resGet.body.source, 'live_router_test');
   });
 });
