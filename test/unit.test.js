@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { escapeMarkdown, normalizeMac } from '../api/request.js';
-import { parseCallbackData, parseCustomAuthMessage, normalizeDigits } from '../api/webhook.js';
+import { parseCallbackData, parseCustomAuthMessage, normalizeDigits, parseDurationString } from '../api/webhook.js';
 import { parseCallbackData as parseCallbackDataTelegram } from '../api/telegram.js';
 import { timingSafeCompare } from '../api/poll.js';
 import { checkAdminAuth } from '../api/admin.js';
@@ -167,8 +167,58 @@ Select duration below or reply with custom minutes (e.g. 15):`;
     });
   });
 
+  test('parses parseDurationString across all English and Bengali variations', () => {
+    assert.equal(parseDurationString('১ মিনিট'), 1);
+    assert.equal(parseDurationString('১মিনিট'), 1);
+    assert.equal(parseDurationString('১ মিনিট।'), 1);
+    assert.equal(parseDurationString('১ মিনিট.'), 1);
+    assert.equal(parseDurationString('১ মিনিট সময়'), 1);
+    assert.equal(parseDurationString('১ মিনিট সময়'), 1);
+    assert.equal(parseDurationString('১ মিনিটের জন্য'), 1);
+    assert.equal(parseDurationString('১ মিনিট এক্সেস'), 1);
+    assert.equal(parseDurationString('১মিঃ'), 1);
+    assert.equal(parseDurationString('১ মি.'), 1);
+    assert.equal(parseDurationString('১'), 1);
+    assert.equal(parseDurationString('1'), 1);
+    assert.equal(parseDurationString('1m'), 1);
+    assert.equal(parseDurationString('1 min'), 1);
+    assert.equal(parseDurationString('1 minute'), 1);
+    assert.equal(parseDurationString('15'), 15);
+    assert.equal(parseDurationString('15m'), 15);
+    assert.equal(parseDurationString('15 mins'), 15);
+    assert.equal(parseDurationString('15 মিনিট'), 15);
+    assert.equal(parseDurationString('1h'), 60);
+    assert.equal(parseDurationString('2 hrs'), 120);
+    assert.equal(parseDurationString('1.5h'), 90);
+    assert.equal(parseDurationString('১ ঘন্টা'), 60);
+    assert.equal(parseDurationString('২ ঘণ্টা'), 120);
+    assert.equal(parseDurationString('0'), 0);
+    assert.equal(parseDurationString('unlimited'), 0);
+    assert.equal(parseDurationString('আনলিমিটেড'), 0);
+    assert.equal(parseDurationString('reject'), -1);
+    assert.equal(parseDurationString('বাতিল'), -1);
+    assert.equal(parseDurationString('random text'), null);
+  });
+
   test('parses reply-to-card with custom minutes and suffixes', () => {
-    // Plain number
+    // 1 minute cases
+    assert.deepEqual(parseCustomAuthMessage('১ মিনিট', sampleCard), {
+      action: 'auth',
+      mac: 'aa:bb:cc:dd:ee:ff',
+      duration: 1
+    });
+    assert.deepEqual(parseCustomAuthMessage('১মিনিট', sampleCard), {
+      action: 'auth',
+      mac: 'aa:bb:cc:dd:ee:ff',
+      duration: 1
+    });
+    assert.deepEqual(parseCustomAuthMessage('১ মিনিট।', sampleCard), {
+      action: 'auth',
+      mac: 'aa:bb:cc:dd:ee:ff',
+      duration: 1
+    });
+
+    // Plain numbers and suffixes
     assert.deepEqual(parseCustomAuthMessage('15', sampleCard), {
       action: 'auth',
       mac: 'aa:bb:cc:dd:ee:ff',
@@ -247,10 +297,29 @@ Select duration below or reply with custom minutes (e.g. 15):`;
     });
   });
 
-  test('returns null when text does not match or reply has no MAC', () => {
+  test('handles duration messages without reply or without MAC in reply', () => {
+    // When reply has no MAC or when reply is omitted, mac is null (for auto-resolution in handler)
+    assert.deepEqual(parseCustomAuthMessage('15', 'No MAC address in this message'), {
+      action: 'auth',
+      mac: null,
+      duration: 15
+    });
+    assert.deepEqual(parseCustomAuthMessage('১ মিনিট', null), {
+      action: 'auth',
+      mac: null,
+      duration: 1
+    });
+    assert.deepEqual(parseCustomAuthMessage('reject', null), {
+      action: 'deauth',
+      mac: null,
+      duration: null
+    });
+  });
+
+  test('returns null when text is not a duration or command', () => {
     assert.equal(parseCustomAuthMessage('hello world', sampleCard), null);
-    assert.equal(parseCustomAuthMessage('15', 'No MAC address in this message'), null);
     assert.equal(parseCustomAuthMessage('', sampleCard), null);
+    assert.equal(parseCustomAuthMessage(null, sampleCard), null);
   });
 });
 

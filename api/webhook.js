@@ -106,17 +106,73 @@ export function normalizeDigits(str) {
 }
 
 /**
+ * Parses duration in minutes from user text.
+ * Supports digits, units (m, min, mins, minute, minutes, h, hr, hours, মিনিট, মিনিটের, মি, ঘন্টা, ঘণ্টা),
+ * Bengali numerals, and conversational suffixes (সময়, সময়, এক্সেস, দাও, দেন, এর জন্য).
+ *
+ * Returns:
+ *  - number >= 0 (minutes, 0 = unlimited)
+ *  - -1 (rejection / cancel)
+ *  - null (not a recognized duration)
+ *
+ * @param {string} text
+ * @returns {number|null}
+ */
+export function parseDurationString(text) {
+  if (!text || typeof text !== 'string') return null;
+  const raw = normalizeDigits(text.trim());
+  const cleaned = raw
+    .replace(/[।!?~:;\-_ঃ,]+/g, ' ')
+    .replace(/(?<!\d)\.|\.(?!\d)/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!cleaned) return null;
+
+  // 1. Unlimited
+  if (/^(?:unlimited|unlimit|0|স্থায়ী|আনলিমিটেড|ইনফিনিটি|♾)$/i.test(cleaned) || /^\/unlimited$/i.test(cleaned)) {
+    return 0;
+  }
+
+  // 2. Rejection / Cancel
+  if (/^(?:reject|cancel|deauth|kick|no|বাতিল|না|❌)$/i.test(cleaned) || /^\/(?:reject|deauth|cancel)$/i.test(cleaned)) {
+    return -1;
+  }
+
+  // 3. Hours: e.g. "1h", "2 hrs", "1 hour", "1.5h", "২ ঘন্টা", "১ ঘণ্টা", "১ ঘণ্টা সময়"
+  const hourMatch = cleaned.match(/^(?:\/auth\s+)?(\d+(?:\.\d+)?)\s*(?:h|hr|hrs|hour|hours|ঘণ্টা|ঘন্টা|ঘন্টার|ঘণ্টার)(?:\s*(?:সময়|সময়|এক্সেস|access|এর\s*জন্য|জন্য|দাও|দেন))?$/i);
+  if (hourMatch) {
+    const hours = parseFloat(hourMatch[1]);
+    if (!isNaN(hours) && hours > 0) {
+      return Math.round(hours * 60);
+    }
+  }
+
+  // 4. Minutes: e.g. "1", "15", "10m", "20 mins", "1 minute", "১ মিনিট", "১ মিনিট সময়", "১ মিনিটের জন্য", "১মি"
+  const minMatch = cleaned.match(/^(?:\/auth\s+)?(\d+)(?:\s*(?:m|min|mins|minute|minutes|মিনিট|মিনিটের|মি))?(?:\s*(?:সময়|সময়|এক্সেস|access|দাও|দেন|এর\s*জন্য|জন্য))?$/i);
+  if (minMatch) {
+    const duration = parseInt(minMatch[1], 10);
+    if (!isNaN(duration) && duration >= 0) {
+      return duration;
+    }
+  }
+
+  return null;
+}
+
+/**
  * Parses custom authorization commands or reply-to-message minutes from Telegram text.
  * Supports:
  *  - Direct commands: "/auth <mac> <duration>", "/auth <mac>", "/deauth <mac>"
- *  - Reply to request cards with minutes: "10", "15", "20", "45", "10m", "15 mins", "15 মিনিট", "১৫", "/auth 15"
+ *  - Reply to request cards with minutes: "1", "15", "10m", "20 mins", "১ মিনিট", "১মিনিট", "১ মিনিট সময়", "১৫"
  *  - Reply to request cards with hours: "1h", "2h", "1.5h", "1 hour", "২ ঘন্টা"
  *  - Reply to request cards with reject: "reject", "cancel", "deauth", "বাতিল", "না", "❌"
  *  - Reply to request cards with unlimited: "0", "unlimited", "স্থায়ী", "আনলিমিটেড", "♾"
+ *  - Messages with duration only (mac will be null, allowing automatic resolution from pending queue)
  *
  * @param {string} text - User message text
  * @param {string} [replyToText] - Text of the message being replied to (if any)
- * @returns {{ action: 'auth'|'deauth', mac: string, duration?: number|null } | null}
+ * @returns {{ action: 'auth'|'deauth', mac: string|null, duration?: number|null } | null}
  */
 export function parseCustomAuthMessage(text, replyToText = null) {
   if (!text || typeof text !== 'string') return null;
@@ -137,44 +193,26 @@ export function parseCustomAuthMessage(text, replyToText = null) {
     return { action: 'deauth', mac, duration: null };
   }
 
-  // 2. Reply-to-message logic
+  // 2. Parse duration value from text
+  const durationValue = parseDurationString(text);
+  if (durationValue === null) {
+    return null;
+  }
+
+  // 3. Extract MAC from reply-to-message if present
+  let mac = null;
   if (replyToText && typeof replyToText === 'string') {
     const macMatch = replyToText.match(/([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}/);
     if (macMatch) {
-      const mac = macMatch[0].toLowerCase().replace(/-/g, ':');
-
-      // Check if reply is a rejection
-      if (/^(?:reject|cancel|deauth|kick|no|বাতিল|না|❌)$/i.test(trimmed) || /^\/(?:reject|deauth|cancel)$/i.test(trimmed)) {
-        return { action: 'deauth', mac, duration: null };
-      }
-
-      // Check if reply is unlimited
-      if (/^(?:unlimited|unlimit|0|স্থায়ী|আনলিমিটেড|ইনফিনিটি|♾)$/i.test(trimmed) || /^\/unlimited$/i.test(trimmed)) {
-        return { action: 'auth', mac, duration: 0 };
-      }
-
-      // Check if reply is hours: e.g. "1h", "2 hrs", "1 hour", "1.5h", "২ ঘন্টা"
-      const hourMatch = trimmed.match(/^(?:\/auth\s+)?(\d+(?:\.\d+)?)\s*(?:h|hr|hrs|hour|hours|ঘণ্টা|ঘন্টা)$/i);
-      if (hourMatch) {
-        const hours = parseFloat(hourMatch[1]);
-        if (!isNaN(hours) && hours > 0) {
-          const duration = Math.round(hours * 60);
-          return { action: 'auth', mac, duration };
-        }
-      }
-
-      // Check if reply is a duration number: e.g. "15", "10m", "20 mins", "30 minutes", "/auth 15", "15 মিনিট", "১৫"
-      const numberMatch = trimmed.match(/^(?:\/auth\s+)?(\d+)(?:\s*(?:m|min|mins|minute|minutes|মিনিট))?$/i);
-      if (numberMatch) {
-        const duration = parseInt(numberMatch[1], 10);
-        if (!isNaN(duration) && duration >= 0) {
-          return { action: 'auth', mac, duration };
-        }
-      }
+      mac = macMatch[0].toLowerCase().replace(/-/g, ':');
     }
   }
 
-  return null;
+  if (durationValue === -1) {
+    return { action: 'deauth', mac, duration: null };
+  }
+
+  return { action: 'auth', mac, duration: durationValue };
 }
 
 /**
@@ -238,9 +276,10 @@ export async function updateTelegramMessage(botToken, message, statusText, inlin
 
   try {
     const originalText = message.text || '';
-    // Strip the selection prompt if present
+    // Strip the selection prompt and any prior status line if present
     const cleanBaseText = originalText
       .replace(/\n*Select (?:access )?duration below[^\n]*/gi, '')
+      .replace(/\n*(?:✅|❌)\s*\*?Status:\*?[^\n]*/gi, '')
       .trim();
 
     // Escape Markdown special characters in the base text to prevent Telegram parser errors
@@ -484,7 +523,39 @@ export default async function handler(req, res) {
     // 1.1 Process custom duration authorization or rejection (direct command or reply-to-card)
     const customAuth = parseCustomAuthMessage(message.text, message.reply_to_message?.text);
     if (customAuth) {
-      const { action, mac, duration } = customAuth;
+      let { action, mac, duration } = customAuth;
+
+      // Auto-resolve target MAC from Redis pending queue if message was not a direct command or reply
+      if (!mac) {
+        try {
+          const pendingMacs = await redis.lrange('pending_macs', -1, -1);
+          if (pendingMacs && pendingMacs.length > 0 && MAC_REGEX.test(pendingMacs[0])) {
+            mac = pendingMacs[0].toLowerCase().replace(/-/g, ':');
+          } else {
+            const users = await fetchUserRecords(redis);
+            const pendingUser = users.find(u => String(u.status).toLowerCase() === 'pending');
+            if (pendingUser && pendingUser.mac) {
+              mac = pendingUser.mac.toLowerCase().replace(/-/g, ':');
+            }
+          }
+        } catch (dbErr) {
+          console.warn('[Pending MAC Lookup Error]', dbErr);
+        }
+      }
+
+      // If MAC could still not be resolved, send helpful guidance immediately
+      if (!mac) {
+        const durationPrompt = duration === null ? 'বাতিল' : (duration === 0 ? 'আনলিমিটেড' : `${duration} মিনিট`);
+        const helpMsg = [
+          `ℹ️ *কাকে অনুমোদন দিতে চান তা নির্দিষ্ট করা যায়নি (${durationPrompt})।*`,
+          '━━━━━━━━━━━━━━━━━━━━',
+          'আপনি যে ইউজারকে অনুমোদন দিতে চান তার কার্ড মেসেজটিতে *Reply* করে সময় লিখুন, অথবা সরাসরি কমান্ড লিখুন:',
+          '`/auth <MAC> <মিনিট>` (যেমন: `/auth 46:84:b7:da:39:73 15`)'
+        ].join('\n');
+        await sendTelegramMessage(botToken, chatId, helpMsg, null, redis);
+        return res.status(200).json({ ok: false, error: 'Target MAC could not be resolved.' });
+      }
+
       const adminName = message.from?.first_name || 'Admin';
       const safeAdminName = escapeMarkdown(adminName);
       let command = '';

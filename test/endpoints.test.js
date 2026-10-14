@@ -487,6 +487,128 @@ describe('API Endpoints Validation & Status Codes', () => {
     }
   });
 
+  test('/api/webhook processes "১ মিনিট" message and auto-resolves pending MAC from Redis', async () => {
+    process.env.TELEGRAM_BOT_TOKEN = 'test-token';
+    process.env.UPSTASH_REDIS_REST_URL = 'https://mock.upstash.io';
+    process.env.UPSTASH_REDIS_REST_TOKEN = 'mock-token';
+
+    const fetchCalls = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, options) => {
+      fetchCalls.push({ url: String(url), options });
+      if (String(url).includes('upstash.io')) {
+        let count = 1;
+        try {
+          const parsed = JSON.parse(options?.body);
+          if (Array.isArray(parsed)) {
+            count = parsed.length;
+            // If checking lrange pending_macs, return the pending MAC
+            if (parsed[0] === 'lrange' || (Array.isArray(parsed[0]) && parsed[0][0] === 'lrange')) {
+              const isPipeline = String(url).includes('/pipeline');
+              const lrangeResult = isPipeline ? [{ result: ['46:84:b7:da:39:73'] }] : { result: ['46:84:b7:da:39:73'] };
+              return new Response(JSON.stringify(lrangeResult), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' }
+              });
+            }
+          }
+        } catch {}
+        const resBody = Array.from({ length: count }, () => ({ result: 1 }));
+        return new Response(JSON.stringify(resBody), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      return new Response(JSON.stringify({ ok: true, result: 1 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    };
+
+    try {
+      const req = {
+        method: 'POST',
+        body: {
+          update_id: 9903,
+          message: {
+            message_id: 503,
+            text: '১ মিনিট', // User sends Bengali "১ মিনিট" directly without reply
+            chat: { id: 12345 },
+            from: { first_name: 'AdminUser' }
+          }
+        }
+      };
+      const res = createMockRes();
+      await webhookHandler(req, res);
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.ok, true);
+      assert.equal(res.body.action, 'auth');
+      assert.equal(res.body.mac, '46:84:b7:da:39:73');
+      assert.equal(res.body.duration, 1);
+      assert.equal(res.body.commandQueued, 'ndsctl auth 46:84:b7:da:39:73 1');
+
+      // Verify confirmation message was sent to admin chat
+      const sendMsgCall = fetchCalls.find(c => c.url.includes('sendMessage'));
+      assert.ok(sendMsgCall, 'sendMessage was called for confirmation');
+      const sendBody = JSON.parse(sendMsgCall.options.body);
+      assert.match(sendBody.text, /1 মিনিটের জন্য/);
+      assert.match(sendBody.text, /46:84:b7:da:39:73/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('/api/webhook responds with guidance when duration is given but no pending MAC is found', async () => {
+    process.env.TELEGRAM_BOT_TOKEN = 'test-token';
+    process.env.UPSTASH_REDIS_REST_URL = 'https://mock.upstash.io';
+    process.env.UPSTASH_REDIS_REST_TOKEN = 'mock-token';
+
+    const fetchCalls = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, options) => {
+      fetchCalls.push({ url: String(url), options });
+      if (String(url).includes('upstash.io')) {
+        return new Response(JSON.stringify([{ result: [] }]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      return new Response(JSON.stringify({ ok: true, result: 1 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    };
+
+    try {
+      const req = {
+        method: 'POST',
+        body: {
+          update_id: 9904,
+          message: {
+            message_id: 504,
+            text: '১ মিনিট',
+            chat: { id: 12345 },
+            from: { first_name: 'AdminUser' }
+          }
+        }
+      };
+      const res = createMockRes();
+      await webhookHandler(req, res);
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.ok, false);
+      assert.equal(res.body.error, 'Target MAC could not be resolved.');
+
+      const sendMsgCall = fetchCalls.find(c => c.url.includes('sendMessage'));
+      assert.ok(sendMsgCall, 'sendMessage was called with guidance');
+      const sendBody = JSON.parse(sendMsgCall.options.body);
+      assert.match(sendBody.text, /কাকে অনুমোদন দিতে চান তা নির্দিষ্ট করা যায়নি/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test('/api/webhook processes menu callback query triggers', async () => {
     process.env.TELEGRAM_BOT_TOKEN = 'test-token';
     process.env.UPSTASH_REDIS_REST_URL = 'https://mock.upstash.io';
