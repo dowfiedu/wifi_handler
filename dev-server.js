@@ -24,6 +24,7 @@ import pendingAuthHandler from './api/pending-auth.js';
 import confirmAuthHandler from './api/confirm-auth.js';
 import statusHandler from './api/status.js';
 import routerHandler from './api/router.js';
+import deauthHandler from './api/deauth.js';
 import { parseFasToken } from './lib/opennds.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -238,6 +239,11 @@ const server = http.createServer(async (req, res) => {
   if (pathname === '/api/router') {
     req.body = await parseBody(req);
     return routerHandler(req, res);
+  }
+
+  if (pathname === '/api/deauth') {
+    req.body = await parseBody(req);
+    return deauthHandler(req, res);
   }
 
   if (pathname === '/api/status') {

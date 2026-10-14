@@ -66,6 +66,29 @@ case "$METHOD" in
             logger -t "opennds-binauth" "[INFO] Session ended ($METHOD) for MAC $CLIENT_MAC - kicking station from Wi-Fi"
         fi
         kick_wifi_client "$CLIENT_MAC"
+
+        # Dispatch background notification to Cloud Bridge
+        CONF="/etc/opennds/sync.conf"
+        [ -f "$CONF" ] && . "$CONF"
+        _deauth_url="${DEAUTH_URL:-https://wifihandler.vercel.app/api/deauth}"
+        _start="$5"
+        _end="$6"
+        [ -z "$_start" ] && _start="0"
+        [ -z "$_end" ] && _end="$(date +%s)"
+
+        if command -v uclient-fetch >/dev/null 2>&1; then
+            uclient-fetch -q --timeout=5 \
+                --header="x-router-secret: $ROUTER_SECRET_KEY" \
+                --header="Content-Type: application/json" \
+                --post-data="{\"mac\":\"$CLIENT_MAC\",\"reason\":\"$METHOD\",\"session_start\":$_start,\"session_end\":$_end}" \
+                -O - "$_deauth_url" >/dev/null 2>&1 &
+        elif command -v curl >/dev/null 2>&1; then
+            curl -s -m 5 \
+                -H "x-router-secret: $ROUTER_SECRET_KEY" \
+                -H "Content-Type: application/json" \
+                -d "{\"mac\":\"$CLIENT_MAC\",\"reason\":\"$METHOD\",\"session_start\":$_start,\"session_end\":$_end}" \
+                "$_deauth_url" >/dev/null 2>&1 &
+        fi
         exit 0
         ;;
 

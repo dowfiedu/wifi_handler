@@ -17,6 +17,9 @@ import {
   formatPreviousUsersList,
   formatDashboardMessage,
   buildActiveUsersKeyboard,
+  buildDefaultAuthKeyboard,
+  buildUnlimitedKeyboard,
+  formatDisconnectCard,
   TELEGRAM_MENU_KEYBOARD,
   TELEGRAM_INLINE_MENU,
   trackChatMessage,
@@ -122,6 +125,26 @@ describe('api/webhook.js Callback Parsing', () => {
     assert.deepEqual(parseCallbackData('menu_details'), { action: 'menu', command: 'details' });
     assert.deepEqual(parseCallbackData('menu_users'), { action: 'menu', command: 'details' });
     assert.deepEqual(parseCallbackData('menu_clean'), { action: 'menu', command: 'clean' });
+  });
+
+  test('parses unlim_sess, unlim_perm, and unlim_back callbacks correctly', () => {
+    assert.deepEqual(parseCallbackData('unlim_sess:00:11:22:33:44:55'), {
+      action: 'unlim_sess',
+      mac: '00:11:22:33:44:55',
+      duration: 0,
+      mode: 'session'
+    });
+    assert.deepEqual(parseCallbackData('unlim_perm:00:11:22:33:44:55'), {
+      action: 'unlim_perm',
+      mac: '00:11:22:33:44:55',
+      duration: 0,
+      mode: 'permanent'
+    });
+    assert.deepEqual(parseCallbackData('unlim_back:00:11:22:33:44:55'), {
+      action: 'unlim_back',
+      mac: '00:11:22:33:44:55',
+      duration: null
+    });
   });
 
   test('api/telegram.js correctly aliases parseCallbackData', () => {
@@ -294,6 +317,39 @@ Select duration below or reply with custom minutes (e.g. 15):`;
       action: 'deauth',
       mac: 'aa:bb:cc:dd:ee:ff',
       duration: null
+    });
+  });
+
+  test('parses reply-to-card with permanent or session keywords', () => {
+    assert.deepEqual(parseCustomAuthMessage('স্থায়ী', sampleCard), {
+      action: 'auth',
+      mac: 'aa:bb:cc:dd:ee:ff',
+      duration: 0,
+      mode: 'permanent'
+    });
+    assert.deepEqual(parseCustomAuthMessage('স্থায়ী', sampleCard), {
+      action: 'auth',
+      mac: 'aa:bb:cc:dd:ee:ff',
+      duration: 0,
+      mode: 'permanent'
+    });
+    assert.deepEqual(parseCustomAuthMessage('permanent', sampleCard), {
+      action: 'auth',
+      mac: 'aa:bb:cc:dd:ee:ff',
+      duration: 0,
+      mode: 'permanent'
+    });
+    assert.deepEqual(parseCustomAuthMessage('এককালীন', sampleCard), {
+      action: 'auth',
+      mac: 'aa:bb:cc:dd:ee:ff',
+      duration: 0,
+      mode: 'session'
+    });
+    assert.deepEqual(parseCustomAuthMessage('session', sampleCard), {
+      action: 'auth',
+      mac: 'aa:bb:cc:dd:ee:ff',
+      duration: 0,
+      mode: 'session'
     });
   });
 
@@ -609,6 +665,60 @@ describe('lib/bot-menu.js Helpers & Formatters', () => {
     } finally {
       globalThis.fetch = origFetch;
     }
+  });
+
+  test('formatDisconnectCard formats detailed card with name, mac, times, duration, and Bengali reason', () => {
+    const user = {
+      name: 'Rahim Uddin',
+      mac: '46:84:b7:da:39:73',
+      ip: '192.168.2.155',
+      requestedAt: '2026-10-14T12:00:00.000Z'
+    };
+    const disconnectInfo = {
+      mac: '46:84:b7:da:39:73',
+      reason: 'timeout_deauth',
+      session_start: '2026-10-14T12:00:00.000Z',
+      session_end: '2026-10-14T12:30:00.000Z',
+      ip: '192.168.2.155'
+    };
+
+    const card = formatDisconnectCard(user, disconnectInfo);
+    assert.ok(card.includes('🔴 *Wi-Fi Device Disconnected*'));
+    assert.ok(card.includes('Rahim Uddin'));
+    assert.ok(card.includes('46:84:b7:da:39:73'));
+    assert.ok(card.includes('192.168.2.155'));
+    assert.ok(card.includes('30 মিনিট'));
+    assert.ok(card.includes('⏱ মেয়াদ শেষ (Session Timeout)'));
+  });
+
+  test('formatDisconnectCard formats hours and idle timeout reason safely', () => {
+    const user = null;
+    const disconnectInfo = {
+      mac: 'AA:BB:CC:DD:EE:FF',
+      reason: 'idle_deauth',
+      session_start: '2026-10-14T10:00:00.000Z',
+      session_end: '2026-10-14T11:15:00.000Z'
+    };
+
+    const card = formatDisconnectCard(user, disconnectInfo);
+    assert.ok(card.includes('Guest User'));
+    assert.ok(card.includes('aa:bb:cc:dd:ee:ff'));
+    assert.ok(card.includes('1 ঘণ্টা 15 মিনিট'));
+    assert.ok(card.includes('💤 নিষ্ক্রিয়তা (Idle Timeout)'));
+  });
+
+  test('buildUnlimitedKeyboard and buildDefaultAuthKeyboard return valid inline keyboard arrays', () => {
+    const unlimKb = buildUnlimitedKeyboard('AA:BB:CC:DD:EE:FF');
+    assert.equal(unlimKb.length, 3);
+    assert.equal(unlimKb[0][0].callback_data, 'unlim_sess:aa:bb:cc:dd:ee:ff');
+    assert.equal(unlimKb[1][0].callback_data, 'unlim_perm:aa:bb:cc:dd:ee:ff');
+    assert.equal(unlimKb[2][0].callback_data, 'unlim_back:aa:bb:cc:dd:ee:ff');
+
+    const defaultKb = buildDefaultAuthKeyboard('AA:BB:CC:DD:EE:FF');
+    assert.equal(defaultKb.length, 3);
+    assert.equal(defaultKb[0][0].callback_data, 'auth:aa:bb:cc:dd:ee:ff:10');
+    assert.equal(defaultKb[2][0].callback_data, 'auth:aa:bb:cc:dd:ee:ff:0');
+    assert.equal(defaultKb[2][1].callback_data, 'deauth_aa:bb:cc:dd:ee:ff');
   });
 });
 

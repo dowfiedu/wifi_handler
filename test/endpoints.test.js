@@ -11,6 +11,7 @@ import pendingAuthHandler from '../api/pending-auth.js';
 import confirmAuthHandler from '../api/confirm-auth.js';
 import statusHandler from '../api/status.js';
 import routerHandler from '../api/router.js';
+import deauthHandler from '../api/deauth.js';
 
 // Helper mock response factory
 function createMockRes() {
@@ -1382,5 +1383,324 @@ describe('API Endpoints Validation & Status Codes', () => {
     await routerHandler(reqGet, resGet);
     assert.equal(resGet.statusCode, 200);
     assert.equal(resGet.body.source, 'live_router_test');
+  });
+
+  test('/api/deauth rejects non-POST requests with 405', async () => {
+    const req = { method: 'GET', headers: {} };
+    const res = createMockRes();
+    await deauthHandler(req, res);
+    assert.equal(res.statusCode, 405);
+  });
+
+  test('/api/deauth rejects invalid x-router-secret when configured', async () => {
+    process.env.ROUTER_SECRET_KEY = 'secret123';
+    const req = {
+      method: 'POST',
+      headers: { 'x-router-secret': 'wrong' },
+      body: { mac: 'aa:bb:cc:dd:ee:ff' }
+    };
+    const res = createMockRes();
+    await deauthHandler(req, res);
+    assert.equal(res.statusCode, 401);
+  });
+
+  test('/api/deauth rejects missing or invalid MAC with 400', async () => {
+    const req = {
+      method: 'POST',
+      headers: {},
+      body: { mac: 'invalid-mac' }
+    };
+    const res = createMockRes();
+    await deauthHandler(req, res);
+    assert.equal(res.statusCode, 400);
+  });
+
+  test('/api/deauth accepts valid deauth event, saves to Redis, and delivers disconnect card to Telegram', async () => {
+    process.env.TELEGRAM_BOT_TOKEN = 'test-token';
+    process.env.TELEGRAM_CHAT_ID = '12345';
+    process.env.UPSTASH_REDIS_REST_URL = 'https://mock.upstash.io';
+    process.env.UPSTASH_REDIS_REST_TOKEN = 'mock-token';
+
+    const fetchCalls = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, options) => {
+      fetchCalls.push({ url: String(url), options });
+      if (String(url).includes('upstash.io')) {
+        const isPipeline = String(url).includes('/pipeline');
+        const bodyStr = String(options?.body || '');
+        const enc = (s) => Buffer.from(String(s)).toString('base64');
+        let resVal = 1;
+        if (bodyStr.includes('deauth_notified') && (bodyStr.includes('"get"') || bodyStr.includes('get'))) {
+          resVal = null;
+        } else if (bodyStr.includes('hgetall')) {
+          resVal = [enc('name'), enc('Sabbir'), enc('mac'), enc('46:84:b7:da:39:73'), enc('ip'), enc('192.168.2.144')];
+        }
+        const data = isPipeline ? [{ result: resVal }] : { result: resVal };
+        return new Response(JSON.stringify(data), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 999 } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    };
+
+    try {
+      const req = {
+        method: 'POST',
+        headers: {},
+        body: {
+          mac: '46:84:b7:da:39:73',
+          reason: 'timeout_deauth',
+          session_start: 1760443200,
+          session_end: 1760445000
+        }
+      };
+      const res = createMockRes();
+      await deauthHandler(req, res);
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.ok, true);
+      assert.equal(res.body.notified, true);
+      assert.equal(res.body.mac, '46:84:b7:da:39:73');
+
+      // Verify Telegram notification was dispatched
+      const sendCall = fetchCalls.find(c => c.url.includes('sendMessage'));
+      assert.ok(sendCall, 'sendMessage was called');
+      const body = JSON.parse(sendCall.options.body);
+      assert.equal(body.chat_id, '12345');
+      assert.match(body.text, /Wi-Fi Device Disconnected/);
+      assert.match(body.text, /Sabbir/);
+      assert.match(body.text, /46:84:b7:da:39:73/);
+      assert.match(body.text, /Session Timeout/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('/api/webhook prompts unlimited sub-options when auth duration is 0', async () => {
+    process.env.TELEGRAM_BOT_TOKEN = 'test-token';
+    process.env.UPSTASH_REDIS_REST_URL = 'https://mock.upstash.io';
+    process.env.UPSTASH_REDIS_REST_TOKEN = 'mock-token';
+
+    const fetchCalls = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, options) => {
+      fetchCalls.push({ url: String(url), options });
+      if (String(url).includes('upstash.io')) {
+        return new Response(JSON.stringify([{ result: 1 }]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      return new Response(JSON.stringify({ ok: true, result: 1 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    };
+
+    try {
+      const req = {
+        method: 'POST',
+        body: {
+          callback_query: {
+            id: 'cb_unlim',
+            data: 'auth:aa:bb:cc:dd:ee:ff:0',
+            message: {
+              chat: { id: 12345 },
+              message_id: 50,
+              text: '📶 New Wi-Fi Access Request\n👤 User: Sabbir\nSelect duration below:'
+            },
+            from: { first_name: 'Admin' }
+          }
+        }
+      };
+      const res = createMockRes();
+      await webhookHandler(req, res);
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.ok, true);
+      assert.equal(res.body.action, 'unlimited_menu_prompted');
+
+      const editMsgCall = fetchCalls.find(c => c.url.includes('editMessageText'));
+      assert.ok(editMsgCall, 'editMessageText was called');
+      const body = JSON.parse(editMsgCall.options.body);
+      assert.match(body.text, /আনলিমিটেড অ্যাক্সেস মোড/);
+      assert.equal(body.reply_markup.inline_keyboard[0][0].callback_data, 'unlim_sess:aa:bb:cc:dd:ee:ff');
+      assert.equal(body.reply_markup.inline_keyboard[1][0].callback_data, 'unlim_perm:aa:bb:cc:dd:ee:ff');
+      assert.equal(body.reply_markup.inline_keyboard[2][0].callback_data, 'unlim_back:aa:bb:cc:dd:ee:ff');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('/api/webhook executes unlim_sess and unlim_perm actions correctly', async () => {
+    process.env.TELEGRAM_BOT_TOKEN = 'test-token';
+    process.env.UPSTASH_REDIS_REST_URL = 'https://mock.upstash.io';
+    process.env.UPSTASH_REDIS_REST_TOKEN = 'mock-token';
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      if (String(url).includes('upstash.io')) {
+        return new Response(JSON.stringify([{ result: 1 }]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 123 } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    };
+
+    try {
+      // 1. Session Unlimited
+      const reqSess = {
+        method: 'POST',
+        body: {
+          callback_query: {
+            id: 'cb_sess',
+            data: 'unlim_sess:aa:bb:cc:dd:ee:ff',
+            message: {
+              chat: { id: 12345 },
+              message_id: 51,
+              text: '📶 New Wi-Fi Access Request'
+            },
+            from: { first_name: 'Admin' }
+          }
+        }
+      };
+      const resSess = createMockRes();
+      await webhookHandler(reqSess, resSess);
+      assert.equal(resSess.statusCode, 200);
+      assert.equal(resSess.body.ok, true);
+      assert.equal(resSess.body.action, 'unlim_sess');
+      assert.equal(resSess.body.commandQueued, 'ndsctl auth aa:bb:cc:dd:ee:ff 0');
+
+      // 2. Permanent Trusted
+      const reqPerm = {
+        method: 'POST',
+        body: {
+          callback_query: {
+            id: 'cb_perm',
+            data: 'unlim_perm:aa:bb:cc:dd:ee:ff',
+            message: {
+              chat: { id: 12345 },
+              message_id: 52,
+              text: '📶 New Wi-Fi Access Request'
+            },
+            from: { first_name: 'Admin' }
+          }
+        }
+      };
+      const resPerm = createMockRes();
+      await webhookHandler(reqPerm, resPerm);
+      assert.equal(resPerm.statusCode, 200);
+      assert.equal(resPerm.body.ok, true);
+      assert.equal(resPerm.body.action, 'unlim_perm');
+      assert.equal(resPerm.body.commandQueued, 'ndsctl trust aa:bb:cc:dd:ee:ff');
+
+      // 3. Back to default keyboard
+      const reqBack = {
+        method: 'POST',
+        body: {
+          callback_query: {
+            id: 'cb_back',
+            data: 'unlim_back:aa:bb:cc:dd:ee:ff',
+            message: {
+              chat: { id: 12345 },
+              message_id: 53,
+              text: '📶 New Wi-Fi Access Request'
+            },
+            from: { first_name: 'Admin' }
+          }
+        }
+      };
+      const resBack = createMockRes();
+      await webhookHandler(reqBack, resBack);
+      assert.equal(resBack.statusCode, 200);
+      assert.equal(resBack.body.ok, true);
+      assert.equal(resBack.body.action, 'unlimited_menu_cancelled');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('/api/webhook text commands handle permanent and session keywords directly', async () => {
+    process.env.TELEGRAM_BOT_TOKEN = 'test-token';
+    process.env.UPSTASH_REDIS_REST_URL = 'https://mock.upstash.io';
+    process.env.UPSTASH_REDIS_REST_TOKEN = 'mock-token';
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      if (String(url).includes('upstash.io')) {
+        return new Response(JSON.stringify([{ result: 1 }]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 123 } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    };
+
+    try {
+      const cardText = '📶 *New Wi-Fi Access Request*\n🏷 MAC: `46:84:b7:da:39:73`';
+
+      // 1. Reply with "স্থায়ী"
+      const reqPerm = {
+        method: 'POST',
+        body: {
+          message: {
+            text: 'স্থায়ী',
+            chat: { id: 12345 },
+            reply_to_message: { text: cardText }
+          }
+        }
+      };
+      const resPerm = createMockRes();
+      await webhookHandler(reqPerm, resPerm);
+      assert.equal(resPerm.statusCode, 200);
+      assert.equal(resPerm.body.mode, 'permanent');
+      assert.equal(resPerm.body.commandQueued, 'ndsctl trust 46:84:b7:da:39:73');
+
+      // 2. Reply with "এককালীন"
+      const reqSess = {
+        method: 'POST',
+        body: {
+          message: {
+            text: 'এককালীন',
+            chat: { id: 12345 },
+            reply_to_message: { text: cardText }
+          }
+        }
+      };
+      const resSess = createMockRes();
+      await webhookHandler(reqSess, resSess);
+      assert.equal(resSess.statusCode, 200);
+      assert.equal(resSess.body.mode, 'session');
+      assert.equal(resSess.body.commandQueued, 'ndsctl auth 46:84:b7:da:39:73 0');
+
+      // 3. Reply with "unlimited" (unspecified mode prompts sub-options)
+      const reqUnlim = {
+        method: 'POST',
+        body: {
+          message: {
+            text: 'unlimited',
+            chat: { id: 12345 },
+            reply_to_message: { text: cardText }
+          }
+        }
+      };
+      const resUnlim = createMockRes();
+      await webhookHandler(reqUnlim, resUnlim);
+      assert.equal(resUnlim.statusCode, 200);
+      assert.equal(resUnlim.body.action, 'unlimited_prompt_sent');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

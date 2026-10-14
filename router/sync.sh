@@ -181,8 +181,32 @@ while true; do
                 esac
 
                 case "$cmd" in
-                    ndsctl\ deauth\ *) kick_wifi_client "$(printf '%s' "$cmd" | awk '{print $3}')" ;;
-                    ndsctl\ auth\ *) confirm_auth "$(printf '%s' "$cmd" | awk '{print $3}')" ;;
+                    ndsctl\ deauth\ *)
+                        _deauth_mac=$(printf '%s' "$cmd" | awk '{print $3}')
+                        kick_wifi_client "$_deauth_mac"
+                        if command -v uci >/dev/null 2>&1; then
+                            uci del_list opennds.@opennds[0].trustedmac="$_deauth_mac" >/dev/null 2>&1
+                            uci commit opennds >/dev/null 2>&1
+                        fi
+                        ;;
+                    ndsctl\ trust\ *)
+                        _trust_mac=$(printf '%s' "$cmd" | awk '{print $3}')
+                        if command -v uci >/dev/null 2>&1; then
+                            uci add_list opennds.@opennds[0].trustedmac="$_trust_mac" >/dev/null 2>&1
+                            uci commit opennds >/dev/null 2>&1
+                        fi
+                        confirm_auth "$_trust_mac"
+                        ;;
+                    ndsctl\ untrust\ *)
+                        _untrust_mac=$(printf '%s' "$cmd" | awk '{print $3}')
+                        if command -v uci >/dev/null 2>&1; then
+                            uci del_list opennds.@opennds[0].trustedmac="$_untrust_mac" >/dev/null 2>&1
+                            uci commit opennds >/dev/null 2>&1
+                        fi
+                        ;;
+                    ndsctl\ auth\ *)
+                        confirm_auth "$(printf '%s' "$cmd" | awk '{print $3}')"
+                        ;;
                 esac
             else
                 log "ERROR" "SECURITY ALERT: Rejected command: '$cmd'"

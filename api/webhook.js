@@ -25,6 +25,8 @@ import {
   formatPreviousUsersList,
   formatDashboardMessage,
   buildActiveUsersKeyboard,
+  buildDefaultAuthKeyboard,
+  buildUnlimitedKeyboard,
   TELEGRAM_MENU_KEYBOARD,
   TELEGRAM_INLINE_MENU,
   fetchUserRecords,
@@ -42,17 +44,48 @@ import {
  *  - "deauth:<mac>"          -> e.g. "deauth:aa:bb:cc:dd:ee:ff"
  *  - "auth:<mac>:<duration>" -> e.g. "auth:aa:bb:cc:dd:ee:ff:30", "auth:aa:bb:cc:dd:ee:ff:60", "auth:aa:bb:cc:dd:ee:ff:0"
  *  - "auth_<mac>_<duration>" -> e.g. "auth_aa:bb:cc:dd:ee:ff_60", "auth_aa:bb:cc:dd:ee:ff_0"
+ *  - "unlim_sess:<mac>"      -> e.g. "unlim_sess:aa:bb:cc:dd:ee:ff" (Session Unlimited)
+ *  - "unlim_perm:<mac>"      -> e.g. "unlim_perm:aa:bb:cc:dd:ee:ff" (Permanent Trusted)
+ *  - "unlim_back:<mac>"      -> e.g. "unlim_back:aa:bb:cc:dd:ee:ff" (Cancel unlimited menu)
  *  - "menu_<command>"        -> e.g. "menu_dashboard", "menu_active", "menu_previous", "menu_details", "menu_clean"
  *
  * @param {string} data - Raw callback_data string
- * @returns {{ action: string, mac?: string, duration?: number|null, command?: string } | null}
+ * @returns {{ action: string, mac?: string, duration?: number|null, mode?: string, command?: string } | null}
  */
 export function parseCallbackData(data) {
   if (!data || typeof data !== 'string') return null;
 
   const trimmed = data.trim();
 
-  // 1. Deauth / Terminate action: e.g. "deauth_<mac>" or "deauth:<mac>"
+  // 1. Unlimited sub-actions
+  if (trimmed.startsWith('unlim_sess:') || trimmed.startsWith('unlim_sess_')) {
+    const rawMac = trimmed.slice(11).trim();
+    const mac = rawMac.toLowerCase().replace(/-/g, ':');
+    if (MAC_REGEX.test(mac)) {
+      return { action: 'unlim_sess', mac, duration: 0, mode: 'session' };
+    }
+    return null;
+  }
+
+  if (trimmed.startsWith('unlim_perm:') || trimmed.startsWith('unlim_perm_')) {
+    const rawMac = trimmed.slice(11).trim();
+    const mac = rawMac.toLowerCase().replace(/-/g, ':');
+    if (MAC_REGEX.test(mac)) {
+      return { action: 'unlim_perm', mac, duration: 0, mode: 'permanent' };
+    }
+    return null;
+  }
+
+  if (trimmed.startsWith('unlim_back:') || trimmed.startsWith('unlim_back_')) {
+    const rawMac = trimmed.slice(11).trim();
+    const mac = rawMac.toLowerCase().replace(/-/g, ':');
+    if (MAC_REGEX.test(mac)) {
+      return { action: 'unlim_back', mac, duration: null };
+    }
+    return null;
+  }
+
+  // 2. Deauth / Terminate action: e.g. "deauth_<mac>" or "deauth:<mac>"
   if (trimmed.startsWith('deauth_') || trimmed.startsWith('deauth:')) {
     const rawMac = trimmed.slice(7).trim();
     const mac = rawMac.toLowerCase().replace(/-/g, ':');
@@ -62,7 +95,7 @@ export function parseCallbackData(data) {
     return null;
   }
 
-  // 2. Auth action: e.g. "auth:<mac>:<duration>" or "auth_<mac>_<duration>"
+  // 3. Auth action: e.g. "auth:<mac>:<duration>" or "auth_<mac>_<duration>"
   if (trimmed.startsWith('auth:') || trimmed.startsWith('auth_')) {
     const rest = trimmed.slice(5).trim();
     const lastSep = Math.max(rest.lastIndexOf(':'), rest.lastIndexOf('_'));
@@ -80,7 +113,7 @@ export function parseCallbackData(data) {
     return { action: 'auth', mac, duration };
   }
 
-  // 3. Menu action: e.g. "menu_dashboard", "menu_active", "menu_previous", "menu_details", "menu_clean"
+  // 4. Menu action: e.g. "menu_dashboard", "menu_active", "menu_previous", "menu_details", "menu_clean"
   if (trimmed.startsWith('menu_') || trimmed.startsWith('menu:')) {
     const rawCmd = trimmed.slice(5).trim().toLowerCase();
     const normalizedCmd = rawCmd === 'history' ? 'previous' : (rawCmd === 'users' ? 'details' : rawCmd);
@@ -193,19 +226,30 @@ export function parseCustomAuthMessage(text, replyToText = null) {
     return { action: 'deauth', mac, duration: null };
   }
 
-  // 2. Parse duration value from text
-  const durationValue = parseDurationString(text);
-  if (durationValue === null) {
-    return null;
-  }
-
-  // 3. Extract MAC from reply-to-message if present
+  // Extract MAC from reply-to-message if present
   let mac = null;
   if (replyToText && typeof replyToText === 'string') {
     const macMatch = replyToText.match(/([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}/);
     if (macMatch) {
       mac = macMatch[0].toLowerCase().replace(/-/g, ':');
     }
+  }
+
+  // Check specific permanent / session keywords
+  const isPermanent = /^(?:permanent|trust|trusted|স্থায়ী|স্থায়ী|বিশ্বস্ত|লগইন ছাড়া|লগইন ছাড়া)$/i.test(trimmed) || /^\/(?:trust|permanent)$/i.test(trimmed);
+  const isSession = /^(?:session|এককালীন|একবার)$/i.test(trimmed) || /^\/session$/i.test(trimmed);
+
+  if (isPermanent) {
+    return { action: 'auth', mac, duration: 0, mode: 'permanent' };
+  }
+  if (isSession) {
+    return { action: 'auth', mac, duration: 0, mode: 'session' };
+  }
+
+  // 2. Parse duration value from text
+  const durationValue = parseDurationString(text);
+  if (durationValue === null) {
+    return null;
   }
 
   if (durationValue === -1) {
@@ -279,6 +323,8 @@ export async function updateTelegramMessage(botToken, message, statusText, inlin
     // Strip the selection prompt and any prior status line if present
     const cleanBaseText = originalText
       .replace(/\n*Select (?:access )?duration below[^\n]*/gi, '')
+      .replace(/\n*Select (?:unlimited )?access mode below[^\n]*/gi, '')
+      .replace(/\n*♾.*?[\s\S]*?(?:মোড নির্বাচন করুন:_|$)/gi, '')
       .replace(/\n*(?:✅|❌)\s*\*?Status:\*?[^\n]*/gi, '')
       .trim();
 
@@ -556,16 +602,50 @@ export default async function handler(req, res) {
         return res.status(200).json({ ok: false, error: 'Target MAC could not be resolved.' });
       }
 
+      // If duration === 0 and mode is not specified (e.g. user typed "unlimited" or "0" or "আনলিমিটেড"):
+      // Prompt with the 2 unlimited options:
+      if (action === 'auth' && duration === 0 && !customAuth.mode) {
+        const modePrompt = [
+          '♾ *আনলিমিটেড অ্যাক্সেস মোড নির্ধারণ করুন:*',
+          `🏷 *ডিভাইস MAC:* \`${mac}\``,
+          '━━━━━━━━━━━━━━━━━━━━',
+          'নিচের কোন মোডে ইউজারকে আনলিমিটেড অ্যাক্সেস দিতে চান?',
+          '• *🔄 এককালীন:* এই সেশনের জন্য আনলিমিটেড, কিন্তু সংযোগ বিচ্ছিন্ন হলে আবার লগইন পেজ আসবে।',
+          '• *永久 স্থায়ী বিশ্বস্ত:* রাউটারে বিশ্বস্ত হিসেবে সংরক্ষিত থাকবে, লগইন পেজ আর কখনোই আসবে না।'
+        ].join('\n');
+
+        await sendTelegramMessage(
+          botToken,
+          chatId,
+          modePrompt,
+          { inline_keyboard: buildUnlimitedKeyboard(mac) },
+          redis
+        );
+        return res.status(200).json({ ok: true, action: 'unlimited_prompt_sent', mac });
+      }
+
       const adminName = message.from?.first_name || 'Admin';
       const safeAdminName = escapeMarkdown(adminName);
       let command = '';
       let statusNotice = '';
       let inlineKeyboard = [];
+      let confirmText = '';
+      const mode = customAuth.mode;
 
       if (action === 'auth') {
-        command = `ndsctl auth ${mac} ${duration}`;
-        const durationLabel = duration === 0 ? 'Unlimited' : `${duration}m`;
-        statusNotice = `✅ *Status:* Authorized (${durationLabel}) by ${safeAdminName}`;
+        if (mode === 'permanent') {
+          command = `ndsctl trust ${mac}`;
+          statusNotice = `✅ *Status:* Authorized (永久 স্থায়ী বিশ্বস্ত / Permanent Trusted) by ${safeAdminName}`;
+          confirmText = `✅ *অনুমোদন সম্পন্ন:* \`${mac}\` কে *স্থায়ী বিশ্বস্ত (Permanent Trusted)* তালিকায় যুক্ত করা হয়েছে। (লগইন পেজ আর কখনোই আসবে না)`;
+        } else if (duration === 0) {
+          command = `ndsctl auth ${mac} 0`;
+          statusNotice = `✅ *Status:* Authorized (♾ এককালীন / Session Unlimited) by ${safeAdminName}`;
+          confirmText = `✅ *অনুমোদন সম্পন্ন:* \`${mac}\` কে *এককালীন আনলিমিটেড* এক্সেস দেওয়া হয়েছে। (ডিসকানেক্ট হলে আবার লগইন পেজ আসবে)`;
+        } else {
+          command = `ndsctl auth ${mac} ${duration}`;
+          statusNotice = `✅ *Status:* Authorized (${duration}m) by ${safeAdminName}`;
+          confirmText = `✅ *অনুমোদন সম্পন্ন:* \`${mac}\` কে ${duration} মিনিটের জন্য এক্সেস অনুমোদন দেওয়া হয়েছে এবং রাউটার কিউতে পাঠানো হয়েছে।`;
+        }
         inlineKeyboard = [
           [
             { text: '❌ Terminate', callback_data: `deauth_${mac}` }
@@ -574,6 +654,7 @@ export default async function handler(req, res) {
       } else {
         command = `ndsctl deauth ${mac}`;
         statusNotice = `❌ *Status:* Terminated / Revoked by ${safeAdminName}`;
+        confirmText = `❌ *সংযোগ বিচ্ছিন্ন:* \`${mac}\` এর এক্সেস বাতিল করা হয়েছে।`;
         inlineKeyboard = [];
       }
 
@@ -585,6 +666,8 @@ export default async function handler(req, res) {
         await redis.hset(`request:${mac}`, {
           status: action === 'auth' ? 'authorized' : 'terminated',
           duration: duration ?? 0,
+          mode: mode || (duration === 0 ? 'session' : 'timed'),
+          trusted: mode === 'permanent' ? 'true' : 'false',
           reviewedBy: adminName,
           reviewedAt: new Date().toISOString()
         });
@@ -595,11 +678,6 @@ export default async function handler(req, res) {
         }
 
         // 4. Send confirmation message to admin chat
-        const durationText = duration === 0 ? 'আনলিমিটেড' : `${duration} মিনিটের জন্য`;
-        const confirmText = action === 'auth'
-          ? `✅ *অনুমোদন সম্পন্ন:* \`${mac}\` কে ${durationText} এক্সেস অনুমোদন দেওয়া হয়েছে এবং রাউটার কিউতে পাঠানো হয়েছে।`
-          : `❌ *সংযোগ বিচ্ছিন্ন:* \`${mac}\` এর এক্সেস বাতিল করা হয়েছে।`;
-
         await sendTelegramMessage(botToken, chatId, confirmText, null, redis);
 
         return res.status(200).json({
@@ -607,6 +685,7 @@ export default async function handler(req, res) {
           action,
           mac,
           duration,
+          mode: mode || null,
           commandQueued: command
         });
       } catch (err) {
@@ -713,20 +792,59 @@ export default async function handler(req, res) {
     return res.status(200).json({ ok: true, action: 'menu', command: parsed.command });
   }
 
-  // Handle Client Authorization / Deauthorization actions
-  const { action, mac, duration } = parsed;
+  // Handle Unlimited sub-mode prompting and switching
+  if (parsed.action === 'auth' && parsed.duration === 0) {
+    await answerCallbackQuery(botToken, callbackQueryId, '♾ আনলিমিটেড মোড নির্বাচন করুন', false);
+    const unlimKeyboard = buildUnlimitedKeyboard(parsed.mac);
+    const modePrompt = '♾ *আনলিমিটেড অ্যাক্সেস মোড নির্ধারণ করুন:*\n• *এককালীন:* সংযোগ বিচ্ছিন্ন হলে পরবর্তী বার আবার লগইন পেজ আসবে\n• *স্থায়ী বিশ্বস্ত:* লগইন পেজ আর কখনোই আসবে না\n\n_নিচের যেকোনো একটি মোড নির্বাচন করুন:_';
+    await updateTelegramMessage(botToken, cbMessage, modePrompt, unlimKeyboard);
+    return res.status(200).json({ ok: true, action: 'unlimited_menu_prompted', mac: parsed.mac });
+  }
+
+  if (parsed.action === 'unlim_back') {
+    await answerCallbackQuery(botToken, callbackQueryId, '🔙 পূর্বের অপশনে ফিরে যাওয়া হয়েছে', false);
+    const defaultKeyboard = buildDefaultAuthKeyboard(parsed.mac);
+    const defaultPrompt = 'Select duration below or reply with custom minutes (e.g. 15):';
+    await updateTelegramMessage(botToken, cbMessage, defaultPrompt, defaultKeyboard);
+    return res.status(200).json({ ok: true, action: 'unlimited_menu_cancelled', mac: parsed.mac });
+  }
+
+  // Handle Client Authorization / Deauthorization / Unlimited Sub-actions
+  const { action, mac, duration, mode } = parsed;
   let command = '';
   let ackMessage = '';
   let statusNotice = '';
+  let confirmText = '';
   let inlineKeyboard = [];
   const adminName = from?.first_name || 'Admin';
   const safeAdminName = escapeMarkdown(adminName);
 
-  if (action === 'auth') {
+  if (action === 'unlim_perm') {
+    command = `ndsctl trust ${mac}`;
+    ackMessage = `✅ স্থায়ী বিশ্বস্ত অনুমোদিত (${mac})`;
+    statusNotice = `✅ *Status:* Authorized (永久 স্থায়ী বিশ্বস্ত / Permanent Trusted) by ${safeAdminName}`;
+    confirmText = `✅ *অনুমোদন সম্পন্ন:* \`${mac}\` কে *স্থায়ী বিশ্বস্ত (Permanent Trusted)* তালিকায় যুক্ত করা হয়েছে। (লগইন পেজ আর কখনোই আসবে না)`;
+    inlineKeyboard = [
+      [
+        { text: '❌ Terminate', callback_data: `deauth_${mac}` }
+      ]
+    ];
+  } else if (action === 'unlim_sess') {
+    command = `ndsctl auth ${mac} 0`;
+    ackMessage = `✅ এককালীন আনলিমিটেড অনুমোদিত (${mac})`;
+    statusNotice = `✅ *Status:* Authorized (♾ এককালীন / Session Unlimited) by ${safeAdminName}`;
+    confirmText = `✅ *অনুমোদন সম্পন্ন:* \`${mac}\` কে *এককালীন আনলিমিটেড* এক্সেস দেওয়া হয়েছে। (ডিসকানেক্ট হলে আবার লগইন পেজ আসবে)`;
+    inlineKeyboard = [
+      [
+        { text: '❌ Terminate', callback_data: `deauth_${mac}` }
+      ]
+    ];
+  } else if (action === 'auth') {
     command = `ndsctl auth ${mac} ${duration}`;
-    const durationLabel = duration === 0 ? 'Unlimited' : `${duration}m`;
+    const durationLabel = `${duration}m`;
     ackMessage = `✅ Authorized ${mac} (${durationLabel})`;
     statusNotice = `✅ *Status:* Authorized (${durationLabel}) by ${safeAdminName}`;
+    confirmText = `✅ *অনুমোদন সম্পন্ন:* \`${mac}\` কে ${duration} মিনিটের জন্য এক্সেস অনুমোদন দেওয়া হয়েছে।`;
     // Attach "❌ Terminate" button so admin can revoke anytime
     inlineKeyboard = [
       [
@@ -737,6 +855,7 @@ export default async function handler(req, res) {
     command = `ndsctl deauth ${mac}`;
     ackMessage = `❌ Terminated ${mac}`;
     statusNotice = `❌ *Status:* Terminated / Revoked by ${safeAdminName}`;
+    confirmText = `❌ *সংযোগ বিচ্ছিন্ন:* \`${mac}\` এর এক্সেস বাতিল করা হয়েছে।`;
     inlineKeyboard = []; // Remove buttons once terminated
   }
 
@@ -746,12 +865,15 @@ export default async function handler(req, res) {
 
     // 2. Update request state hash in Redis database
     // Setting status to 'terminated' immediately excludes user from Live Dashboard
-    await redis.hset(`request:${mac}`, {
-      status: action === 'auth' ? 'authorized' : 'terminated',
+    const userUpdate = {
+      status: action === 'deauth' ? 'terminated' : 'authorized',
       duration: duration ?? 0,
+      mode: (action === 'unlim_perm' ? 'permanent' : (action === 'unlim_sess' ? 'session' : (mode || (duration === 0 ? 'session' : 'timed')))),
+      trusted: action === 'unlim_perm' ? 'true' : 'false',
       reviewedBy: adminName,
       reviewedAt: new Date().toISOString()
-    });
+    };
+    await redis.hset(`request:${mac}`, userUpdate);
 
     // 3. Clear Telegram client spinner
     await answerCallbackQuery(botToken, callbackQueryId, ackMessage, false);
@@ -774,6 +896,11 @@ export default async function handler(req, res) {
       );
     } else {
       await updateTelegramMessage(botToken, cbMessage, statusNotice, inlineKeyboard);
+    }
+
+    // 5. Send confirmation message to admin chat for unlimited sub-actions
+    if ((action === 'unlim_perm' || action === 'unlim_sess') && cbChatId) {
+      await sendTelegramMessage(botToken, cbChatId, confirmText, null, redis);
     }
 
     return res.status(200).json({
