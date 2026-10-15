@@ -24,6 +24,7 @@ import {
   formatDisconnectCard,
   buildSpeedLimitKeyboard,
   buildSpeedUsersKeyboard,
+  buildRebootConfirmKeyboard,
   TELEGRAM_MENU_KEYBOARD,
   TELEGRAM_INLINE_MENU,
   trackChatMessage,
@@ -48,6 +49,9 @@ import {
 } from '../lib/voucher.js';
 import { handleExtendedCommand } from '../lib/telegram/extended-commands.js';
 import { formatRouterActionNotice, sendRouterConfirmationNotice } from '../lib/telegram/router-confirm.js';
+import { processMenuCommand } from '../lib/telegram/commands.js';
+import { handleTelegramCallback } from '../lib/telegram/callback-handler.js';
+import { handleTelegramMessage } from '../lib/telegram/message-handler.js';
 
 describe('api/request.js Helpers', () => {
   test('escapeMarkdown escapes Markdown special characters', () => {
@@ -153,6 +157,11 @@ describe('api/webhook.js Callback Parsing', () => {
     assert.deepEqual(parseCallbackData('set_speed:aa:bb:cc:dd:ee:ff:5'), { action: 'set_speed', mac: 'aa:bb:cc:dd:ee:ff', mbps: 5 });
     assert.deepEqual(parseCallbackData('gen_voucher:60'), { action: 'gen_voucher', duration: 60 });
     assert.deepEqual(parseCallbackData('gen_voucher:0'), { action: 'gen_voucher', duration: 0 });
+    assert.deepEqual(parseCallbackData('menu_reboot'), { action: 'menu', command: 'reboot' });
+    assert.deepEqual(parseCallbackData('menu_help'), { action: 'menu', command: 'help' });
+    assert.deepEqual(parseCallbackData('menu_rename'), { action: 'menu', command: 'rename' });
+    assert.deepEqual(parseCallbackData('rename_prompt:aa:bb:cc:dd:ee:ff'), { action: 'rename_prompt', mac: 'aa:bb:cc:dd:ee:ff' });
+    assert.deepEqual(parseCallbackData('reboot_confirm'), { action: 'reboot_confirm' });
   });
 
   test('parses unlim_sess, unlim_perm, and unlim_back callbacks correctly', () => {
@@ -594,12 +603,13 @@ describe('lib/bot-menu.js Helpers & Formatters', () => {
   test('TELEGRAM_MENU_KEYBOARD includes direct MAC auth option, guest voucher and persistent settings', () => {
     assert.equal(TELEGRAM_MENU_KEYBOARD.is_persistent, true);
     assert.equal(TELEGRAM_MENU_KEYBOARD.resize_keyboard, true);
-    assert.equal(TELEGRAM_MENU_KEYBOARD.keyboard.length, 4);
+    assert.equal(TELEGRAM_MENU_KEYBOARD.keyboard.length, 5);
     assert.equal(TELEGRAM_MENU_KEYBOARD.keyboard[0].length, 2);
     assert.equal(TELEGRAM_MENU_KEYBOARD.keyboard[1].length, 2);
     assert.equal(TELEGRAM_MENU_KEYBOARD.keyboard[2].length, 2);
     assert.equal(TELEGRAM_MENU_KEYBOARD.keyboard[3].length, 2);
-    // Verifies MAC authorize and guest voucher buttons are present
+    assert.equal(TELEGRAM_MENU_KEYBOARD.keyboard[4].length, 2);
+    // Verifies MAC authorize, guest voucher, reboot and help buttons are present
     const allButtons = TELEGRAM_MENU_KEYBOARD.keyboard.flat().map(b => b.text);
     assert.ok(allButtons.includes('➕ ম্যাক অথোরাইজ'));
     assert.ok(allButtons.includes('🎟️ গেস্ট ভাউচার'));
@@ -608,6 +618,12 @@ describe('lib/bot-menu.js Helpers & Formatters', () => {
     assert.ok(!allButtons.some(b => b.includes('ড্যাশবোর্ড')));
     assert.ok(allButtons.includes('🟢 অ্যাক্টিভ ইউজার'));
     assert.ok(allButtons.includes('🧹 ক্লিন চ্যাট ও ডাটা'));
+    assert.ok(allButtons.includes('🔄 রাউটার রিবুট'));
+    assert.ok(allButtons.includes('❓ হেল্প গাইড'));
+
+    assert.equal(TELEGRAM_INLINE_MENU.inline_keyboard.length, 5);
+    assert.equal(TELEGRAM_INLINE_MENU.inline_keyboard[4][0].callback_data, 'menu_reboot');
+    assert.equal(TELEGRAM_INLINE_MENU.inline_keyboard[4][1].callback_data, 'menu_help');
   });
 
   test('formatActiveUsersList formats count and details for active users', () => {
@@ -664,6 +680,14 @@ describe('lib/bot-menu.js Helpers & Formatters', () => {
     assert.equal(normalizeCommandText('স্পিড লিমিট'), 'speed');
     assert.equal(normalizeCommandText('/report'), 'report');
     assert.equal(normalizeCommandText('রিপোর্ট'), 'report');
+    assert.equal(normalizeCommandText('/reboot'), 'reboot');
+    assert.equal(normalizeCommandText('🔄 রাউটার রিবুট'), 'reboot');
+    assert.equal(normalizeCommandText('রাউটার রিবুট'), 'reboot');
+    assert.equal(normalizeCommandText('/help'), 'help');
+    assert.equal(normalizeCommandText('❓ হেল্প গাইড'), 'help');
+    assert.equal(normalizeCommandText('হেল্প গাইড'), 'help');
+    assert.equal(normalizeCommandText('/rename'), 'rename');
+    assert.equal(normalizeCommandText('🏷️ ডিভাইস রিনেম'), 'rename');
     assert.equal(normalizeCommandText('something-else'), null);
   });
 
@@ -816,12 +840,23 @@ describe('lib/bot-menu.js Helpers & Formatters', () => {
   test('buildSingleUserDeauthKeyboard generates disconnect and speed limit buttons for target user', () => {
     const kb = buildSingleUserDeauthKeyboard('46:84:b7:da:39:73');
     assert.ok(kb && kb.inline_keyboard);
-    assert.equal(kb.inline_keyboard.length, 1);
+    assert.equal(kb.inline_keyboard.length, 2);
     assert.equal(kb.inline_keyboard[0].length, 2);
     assert.equal(kb.inline_keyboard[0][0].text, '❌ সংযোগ বিচ্ছিন্ন করুন');
     assert.equal(kb.inline_keyboard[0][0].callback_data, 'deauth_46:84:b7:da:39:73');
     assert.equal(kb.inline_keyboard[0][1].text, '⚡ স্পিড লিমিট');
     assert.equal(kb.inline_keyboard[0][1].callback_data, 'speed_menu:46:84:b7:da:39:73');
+    assert.equal(kb.inline_keyboard[1].length, 1);
+    assert.equal(kb.inline_keyboard[1][0].text, '🏷️ নাম পরিবর্তন');
+    assert.equal(kb.inline_keyboard[1][0].callback_data, 'rename_prompt:46:84:b7:da:39:73');
+  });
+
+  test('buildRebootConfirmKeyboard returns valid confirm and cancel buttons', () => {
+    const kb = buildRebootConfirmKeyboard();
+    assert.ok(Array.isArray(kb));
+    assert.equal(kb.length, 2);
+    assert.equal(kb[0][0].callback_data, 'reboot_confirm');
+    assert.equal(kb[1][0].callback_data, 'menu_back');
   });
 
   test('buildSpeedLimitKeyboard generates preset speed options and full speed option', () => {
@@ -1291,6 +1326,113 @@ describe('lib/telegram/router-confirm.js Router Execution Notices', () => {
       assert.equal(second.ok, true);
       assert.equal(second.deduplicated, true);
       assert.equal(fetchCalls.length, 1);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+});
+
+describe('Telegram Bot Interactive Menu & Action Integrations', () => {
+  function createMockRedis() {
+    const store = new Map();
+    const lists = new Map();
+    const hashes = new Map();
+    return {
+      async get(key) { return store.has(key) ? store.get(key) : null; },
+      async set(key, val) { store.set(key, val); return 'OK'; },
+      async del(key) { store.delete(key); return 1; },
+      async rpush(key, ...vals) {
+        const l = lists.get(key) || [];
+        l.push(...vals);
+        lists.set(key, l);
+        return l.length;
+      },
+      async lrange(key) { return lists.get(key) || []; },
+      async hset(key, obj) {
+        const cur = hashes.get(key) || {};
+        hashes.set(key, { ...cur, ...obj });
+        return 1;
+      },
+      async hgetall(key) { return hashes.get(key) || {}; }
+    };
+  }
+
+  test('processMenuCommand handles reboot, help, and rename commands', async () => {
+    const redis = createMockRedis();
+    const rebootRes = await processMenuCommand('reboot', redis);
+    assert.ok(rebootRes.text.includes('রাউটার রিস্টার্ট / রিবুট'));
+    assert.ok(rebootRes.replyMarkup.inline_keyboard);
+    assert.equal(rebootRes.ackText, '🔄 রিবুট নিশ্চিতকরণ');
+
+    const helpRes = await processMenuCommand('help', redis);
+    assert.ok(helpRes.text.includes('ক্যাপটিভ পোর্টাল ও বট সহায়িকা'));
+    assert.ok(helpRes.text.includes('রাউটার রিবুট'));
+    assert.equal(helpRes.ackText, '📖 হেল্প গাইড');
+
+    const renameRes = await processMenuCommand('rename', redis);
+    assert.ok(renameRes.text.includes('ডিভাইসের নাম পরিবর্তন'));
+    assert.equal(renameRes.ackText, '🏷️ ডিভাইস রিনেম');
+  });
+
+  test('handleTelegramCallback handles rename_prompt and reboot_confirm', async () => {
+    const redis = createMockRedis();
+    const origFetch = globalThis.fetch;
+    const fetchCalls = [];
+    globalThis.fetch = async (url, opts) => {
+      fetchCalls.push({ url: String(url), body: opts?.body ? JSON.parse(opts.body) : null });
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 201 } }));
+    };
+
+    try {
+      // 1. rename_prompt
+      const renameCb = {
+        id: 'cb-1',
+        data: 'rename_prompt:46:84:b7:da:39:73',
+        message: { message_id: 301, chat: { id: 12345 } },
+        from: { first_name: 'Admin' }
+      };
+      const renameRes = await handleTelegramCallback(renameCb, redis, 'mock-token', 12345);
+      assert.equal(renameRes.status, 200);
+      assert.equal(renameRes.data.action, 'rename_prompt_set');
+      assert.equal(await redis.get('last_rename_mac:12345'), '46:84:b7:da:39:73');
+
+      // 2. reboot_confirm
+      const rebootCb = {
+        id: 'cb-2',
+        data: 'reboot_confirm',
+        message: { message_id: 302, chat: { id: 12345 } },
+        from: { first_name: 'Admin' }
+      };
+      const rebootRes = await handleTelegramCallback(rebootCb, redis, 'mock-token', 12345);
+      assert.equal(rebootRes.status, 200);
+      assert.equal(rebootRes.data.action, 'router_reboot_queued');
+      const queue = await redis.lrange('pending_commands');
+      assert.ok(queue.includes('reboot'));
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+
+  test('handleTelegramMessage handles interactive rename input flow', async () => {
+    const redis = createMockRedis();
+    await redis.set('last_rename_mac:12345', '46:84:b7:da:39:73');
+
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({ ok: true, result: { message_id: 401 } }));
+
+    try {
+      const msg = {
+        message_id: 501,
+        chat: { id: 12345 },
+        text: 'সাদাত ল্যাপটপ',
+        from: { first_name: 'Admin' }
+      };
+      const res = await handleTelegramMessage(msg, redis, 'mock-token', 12345);
+      assert.equal(res.status, 200);
+      assert.equal(res.data.action, 'renamed');
+      assert.equal(res.data.alias, 'সাদাত ল্যাপটপ');
+      assert.equal(await redis.get('device_alias:46:84:b7:da:39:73'), 'সাদাত ল্যাপটপ');
+      assert.equal(await redis.get('last_rename_mac:12345'), null);
     } finally {
       globalThis.fetch = origFetch;
     }
