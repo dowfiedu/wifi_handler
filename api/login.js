@@ -65,7 +65,7 @@ export default async function handler(req, res) {
 
   const cleanMac = normalizeMac(targetMac);
   const cleanIp = targetIp ? targetIp.slice(0, 45) : null;
-  const cleanName = name && typeof name === 'string' && name.trim().length > 0
+  let cleanName = name && typeof name === 'string' && name.trim().length > 0
     ? name.trim().slice(0, 64)
     : 'Guest User';
   const nowIso = new Date().toISOString();
@@ -80,6 +80,11 @@ export default async function handler(req, res) {
         url: redisUrl,
         token: redisToken
       });
+
+      if (cleanName === 'Guest User') {
+        const savedAlias = await redis.get(`device_alias:${cleanMac}`).catch(() => null);
+        if (savedAlias) cleanName = savedAlias;
+      }
 
       // Save/update request state as PENDING
       await redis.hset(`request:${cleanMac}`, {

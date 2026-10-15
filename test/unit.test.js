@@ -30,6 +30,21 @@ import {
   clearChatHistory
 } from '../lib/bot-menu.js';
 import { normalizeCommandText } from '../api/webhook.js';
+import {
+  saveDeviceAlias,
+  getDeviceAlias,
+  parseRenameCommand,
+  formatAliasSuccessMessage
+} from '../lib/telegram/alias.js';
+import {
+  generateVoucherCode,
+  createVoucher,
+  redeemVoucher,
+  listActiveVouchers,
+  formatVoucherCreatedCard,
+  formatVoucherRedeemedNotice
+} from '../lib/voucher.js';
+import { handleExtendedCommand } from '../lib/telegram/extended-commands.js';
 
 describe('api/request.js Helpers', () => {
   test('escapeMarkdown escapes Markdown special characters', () => {
@@ -815,5 +830,320 @@ describe('lib/bot-menu.js Helpers & Formatters', () => {
     }
   });
 });
+
+describe('lib/telegram/alias.js Device Nickname & Alias Management', () => {
+  function createMockRedis() {
+    const store = new Map();
+    const hashes = new Map();
+    return {
+      async get(key) { return store.has(key) ? store.get(key) : null; },
+      async set(key, val) { store.set(key, val); return 'OK'; },
+      async hgetall(key) { return hashes.get(key) || {}; },
+      async hset(key, obj) {
+        const cur = hashes.get(key) || {};
+        hashes.set(key, { ...cur, ...obj });
+        return 1;
+      }
+    };
+  }
+
+  test('saveDeviceAlias saves alias to Redis and updates existing request record', async () => {
+    const redis = createMockRedis();
+    await redis.hset('request:aa:bb:cc:dd:ee:ff', { status: 'authorized', name: 'Old Name' });
+
+    const success = await saveDeviceAlias(redis, 'AA:BB:CC:DD:EE:FF', 'Tanvir (iPhone 14)');
+    assert.equal(success, true);
+
+    const saved = await getDeviceAlias(redis, 'aa:bb:cc:dd:ee:ff');
+    assert.equal(saved, 'Tanvir (iPhone 14)');
+
+    const updatedHash = await redis.hgetall('request:aa:bb:cc:dd:ee:ff');
+    assert.equal(updatedHash.name, 'Tanvir (iPhone 14)');
+  });
+
+  test('saveDeviceAlias safely rejects null inputs and invalid MAC addresses', async () => {
+    const redis = createMockRedis();
+    assert.equal(await saveDeviceAlias(null, 'aa:bb:cc:dd:ee:ff', 'Test'), false);
+    assert.equal(await saveDeviceAlias(redis, null, 'Test'), false);
+    assert.equal(await saveDeviceAlias(redis, 'invalid-mac', 'Test'), false);
+    assert.equal(await saveDeviceAlias(redis, 'aa:bb:cc:dd:ee:ff', ''), false);
+    assert.equal(await getDeviceAlias(redis, 'invalid-mac'), null);
+  });
+
+  test('parseRenameCommand parses direct commands in English and Bengali', () => {
+    const res1 = parseRenameCommand('/rename 46:84:b7:da:39:73 Rahim Laptop');
+    assert.deepEqual(res1, { mac: '46:84:b7:da:39:73', alias: 'Rahim Laptop' });
+
+    const res2 = parseRenameCommand('/alias 46-84-B7-DA-39-73 Smart TV');
+    assert.deepEqual(res2, { mac: '46:84:b7:da:39:73', alias: 'Smart TV' });
+
+    const res3 = parseRenameCommand('নাম 46:84:b7:da:39:73 তানভীর ভাই');
+    assert.deepEqual(res3, { mac: '46:84:b7:da:39:73', alias: 'তানভীর ভাই' });
+  });
+
+  test('parseRenameCommand parses reply-to card messages', () => {
+    const replyText = '👤 *User:* Guest User\n🏷 *MAC:* `46:84:b7:da:39:73`\n⏰ *Timestamp:* 10:30 AM';
+    const res = parseRenameCommand('নাম: শফিক ভাই', replyText);
+    assert.deepEqual(res, { mac: '46:84:b7:da:39:73', alias: 'শফিক ভাই' });
+
+    const res2 = parseRenameCommand('/name Android TV', replyText);
+    assert.deepEqual(res2, { mac: '46:84:b7:da:39:73', alias: 'Android TV' });
+
+    assert.equal(parseRenameCommand('হ্যালো', replyText), null);
+    assert.equal(parseRenameCommand('/rename 123', null), null);
+  });
+
+  test('formatAliasSuccessMessage formats confirmation message', () => {
+    const msg = formatAliasSuccessMessage('46:84:b7:da:39:73', 'তানভীর ভাই');
+    assert.ok(msg.includes('46:84:b7:da:39:73'));
+    assert.ok(msg.includes('তানভীর ভাই'));
+  });
+});
+
+describe('lib/voucher.js Guest Voucher & Passcode Management', () => {
+  function createMockRedis() {
+    const hashes = new Map();
+    const sets = new Map();
+    const lists = new Map();
+    return {
+      async hset(key, obj) {
+        const cur = hashes.get(key) || {};
+        hashes.set(key, { ...cur, ...obj });
+        return 1;
+      },
+      async hgetall(key) { return hashes.get(key) || {}; },
+      async expire() { return 1; },
+      async sadd(key, ...members) {
+        const s = sets.get(key) || new Set();
+        members.forEach(m => s.add(m));
+        sets.set(key, s);
+        return members.length;
+      },
+      async srem(key, ...members) {
+        const s = sets.get(key) || new Set();
+        members.forEach(m => s.delete(m));
+        return 1;
+      },
+      async smembers(key) {
+        const s = sets.get(key) || new Set();
+        return Array.from(s);
+      },
+      async rpush(key, ...vals) {
+        const l = lists.get(key) || [];
+        l.push(...vals);
+        lists.set(key, l);
+        return l.length;
+      },
+      _hashes: hashes,
+      _lists: lists
+    };
+  }
+
+  test('generateVoucherCode returns formatted voucher code with custom prefix', () => {
+    const code1 = generateVoucherCode('PASS');
+    assert.match(code1, /^PASS-[2-9A-Z]{4}$/);
+
+    const code2 = generateVoucherCode('GUEST');
+    assert.match(code2, /^GUEST-[2-9A-Z]{4}$/);
+  });
+
+  test('createVoucher stores voucher in Redis and adds to active_vouchers set', async () => {
+    const redis = createMockRedis();
+    const v = await createVoucher(redis, 60, 'AdminUser', 'Guest of honor');
+
+    assert.ok(v.code);
+    assert.equal(v.duration, 60);
+    assert.equal(v.createdBy, 'AdminUser');
+    assert.equal(v.redeemed, 'false');
+
+    const stored = await redis.hgetall(`voucher:${v.code}`);
+    assert.equal(stored.code, v.code);
+
+    const activeList = await listActiveVouchers(redis);
+    assert.equal(activeList.length, 1);
+    assert.equal(activeList[0].code, v.code);
+  });
+
+  test('redeemVoucher successfully redeems voucher and enqueues router auth command', async () => {
+    const redis = createMockRedis();
+    const v = await createVoucher(redis, 90, 'Admin');
+
+    const res = await redeemVoucher(redis, v.code, '46:84:b7:da:39:73', '192.168.1.150', 'Kamal');
+    assert.equal(res.ok, true);
+    assert.equal(res.duration, 90);
+    assert.equal(res.mac, '46:84:b7:da:39:73');
+    assert.equal(res.commandQueued, 'ndsctl auth 46:84:b7:da:39:73 90');
+
+    // Verify command was pushed to pending_commands
+    const cmds = redis._lists.get('pending_commands');
+    assert.ok(cmds && cmds.includes('ndsctl auth 46:84:b7:da:39:73 90'));
+
+    // Verify voucher marked redeemed
+    const after = await redis.hgetall(`voucher:${v.code}`);
+    assert.equal(after.redeemed, 'true');
+    assert.equal(after.redeemedByMac, '46:84:b7:da:39:73');
+
+    // Double redemption attempt should fail
+    const res2 = await redeemVoucher(redis, v.code, '00:11:22:33:44:55');
+    assert.equal(res2.ok, false);
+    assert.ok(res2.error.includes('ইতিমধ্যে ব্যবহার করা হয়েছে'));
+  });
+
+  test('redeemVoucher rejects invalid code and invalid MAC', async () => {
+    const redis = createMockRedis();
+    const res1 = await redeemVoucher(redis, 'NON-EXIST', '46:84:b7:da:39:73');
+    assert.equal(res1.ok, false);
+
+    const res2 = await redeemVoucher(redis, 'SOME-CODE', 'invalid-mac');
+    assert.equal(res2.ok, false);
+  });
+
+  test('formatVoucherCreatedCard and formatVoucherRedeemedNotice format cards accurately', () => {
+    const card = formatVoucherCreatedCard({ code: 'PASS-9821', duration: 120 });
+    assert.ok(card.includes('PASS-9821'));
+    assert.ok(card.includes('120 মিনিট'));
+
+    const cardUnlim = formatVoucherCreatedCard({ code: 'PASS-0000', duration: 0 });
+    assert.ok(cardUnlim.includes('আনলিমিটেড'));
+
+    const notice = formatVoucherRedeemedNotice('PASS-9821', '46:84:b7:da:39:73', 120, 'Kamal');
+    assert.ok(notice.includes('Kamal'));
+    assert.ok(notice.includes('46:84:b7:da:39:73'));
+    assert.ok(notice.includes('PASS-9821'));
+  });
+});
+
+describe('lib/telegram/extended-commands.js Extended Commands Dispatcher', () => {
+  function createMockRedis() {
+    const store = new Map();
+    const hashes = new Map();
+    const lists = new Map();
+    const sets = new Map();
+    return {
+      async get(key) { return store.has(key) ? store.get(key) : null; },
+      async set(key, val) { store.set(key, val); return 'OK'; },
+      async del(key) { store.delete(key); return 1; },
+      async hset(key, obj) {
+        const cur = hashes.get(key) || {};
+        hashes.set(key, { ...cur, ...obj });
+        return 1;
+      },
+      async hgetall(key) { return hashes.get(key) || {}; },
+      async expire() { return 1; },
+      async sadd(key, ...m) {
+        const s = sets.get(key) || new Set();
+        m.forEach(x => s.add(x));
+        sets.set(key, s);
+        return m.length;
+      },
+      async srem(key, ...m) {
+        const s = sets.get(key) || new Set();
+        m.forEach(x => s.delete(x));
+        return 1;
+      },
+      async smembers(key) {
+        const s = sets.get(key) || new Set();
+        return Array.from(s);
+      },
+      async rpush(key, ...vals) {
+        const l = lists.get(key) || [];
+        l.push(...vals);
+        lists.set(key, l);
+        return l.length;
+      },
+      async lrange(key) { return lists.get(key) || []; },
+      _store: store,
+      _lists: lists
+    };
+  }
+
+  test('handles /rename command and stores alias', async () => {
+    const redis = createMockRedis();
+    const msg = { text: '/rename 46:84:b7:da:39:73 MyLaptop' };
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({ ok: true, result: { message_id: 101 } }));
+
+    try {
+      const res = await handleExtendedCommand(msg, redis, 'mock-token', 12345);
+      assert.equal(res.handled, true);
+      assert.equal(res.data.alias, 'MyLaptop');
+
+      const saved = await redis.get('device_alias:46:84:b7:da:39:73');
+      assert.equal(saved, 'MyLaptop');
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+
+  test('handles /voucher command and returns created voucher', async () => {
+    const redis = createMockRedis();
+    const msg = { text: '/voucher 180', from: { first_name: 'SuperAdmin' } };
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({ ok: true, result: { message_id: 102 } }));
+
+    try {
+      const res = await handleExtendedCommand(msg, redis, 'mock-token', 12345);
+      assert.equal(res.handled, true);
+      assert.equal(res.data.action, 'voucher_created');
+      assert.equal(res.data.voucher.duration, 180);
+      assert.equal(res.data.voucher.createdBy, 'SuperAdmin');
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+
+  test('handles /limit command and queues bandwidth restriction on router', async () => {
+    const redis = createMockRedis();
+    const msg = { text: '/limit 46:84:b7:da:39:73 5' };
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({ ok: true, result: { message_id: 103 } }));
+
+    try {
+      const res = await handleExtendedCommand(msg, redis, 'mock-token', 12345);
+      assert.equal(res.handled, true);
+      assert.equal(res.data.action, 'client_limit_set');
+      assert.equal(res.data.mbps, 5);
+
+      const queuedCmds = redis._lists.get('pending_commands');
+      assert.ok(queuedCmds.some(c => c.includes("uci set archer_guard.limit_4684b7da3973.mbps='5'")));
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+
+  test('handles /report command and generates network summary card', async () => {
+    const redis = createMockRedis();
+    await redis.set('router:latest_status', JSON.stringify({
+      traffic: { current_download_mbps: '24.5', current_upload_mbps: '8.2' },
+      cpu: { usage_percent: '14', temperature_c: '46', uptime_seconds: 90000 }
+    }));
+
+    const msg = { text: '/report' };
+    let sentText = '';
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      const body = opts?.body ? JSON.parse(opts.body) : {};
+      sentText = body.text || '';
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 104 } }));
+    };
+
+    try {
+      const res = await handleExtendedCommand(msg, redis, 'mock-token', 12345);
+      assert.equal(res.handled, true);
+      assert.equal(res.data.action, 'report_generated');
+      assert.ok(sentText.includes('24.5 Mbps'));
+      assert.ok(sentText.includes('46°C'));
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+
+  test('returns handled: false for non-extended commands', async () => {
+    const redis = createMockRedis();
+    const res = await handleExtendedCommand({ text: 'Hello bot' }, redis, 'token', 123);
+    assert.equal(res.handled, false);
+  });
+});
+
 
 

@@ -342,6 +342,33 @@
       to { transform: rotate(360deg); }
     }
 
+    /* Divider & Voucher Box */
+    .divider {
+      display: flex;
+      align-items: center;
+      text-align: center;
+      margin: 1.25rem 0;
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .divider::before,
+    .divider::after {
+      content: '';
+      flex: 1;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    }
+
+    .divider span {
+      padding: 0 0.75rem;
+    }
+
+    .voucher-box {
+      width: 100%;
+    }
+
     /* Alert Boxes */
     .alert {
       padding: 0.875rem 1rem;
@@ -816,6 +843,33 @@
             <div id="btnSpinner" class="spinner" style="display: none;"></div>
           </button>
         </form>
+
+        <!-- Guest Voucher Option -->
+        <div class="divider">
+          <span id="dividerOrText">অথবা</span>
+        </div>
+
+        <div class="voucher-box">
+          <button type="button" id="toggleVoucherBtn" class="btn btn-secondary" style="margin-top: 0;">
+            <span id="btnVoucherToggleText">🎟️ গেস্ট ভাউচার কোড দিয়ে লগইন</span>
+          </button>
+
+          <div id="voucherSection" style="display: none; margin-top: 0.85rem;">
+            <div class="form-group" style="margin-bottom: 0.65rem;">
+              <label for="voucherCode" id="voucherLabel" style="font-size: 0.825rem; color: var(--text-muted); display: block; margin-bottom: 0.4rem;">গেস্ট ভাউচার কোড</label>
+              <input
+                type="text"
+                id="voucherCode"
+                placeholder="যেমন: PASS-7842"
+                style="text-transform: uppercase; font-family: monospace; letter-spacing: 0.12em; font-weight: 700; text-align: center;"
+              />
+            </div>
+            <button type="button" id="redeemVoucherBtn" class="btn btn-success" style="margin-top: 0;">
+              <span id="btnRedeemText">ভাউচার সক্রিয় করুন</span>
+              <div id="voucherSpinner" class="spinner" style="display: none;"></div>
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- VIEW 2: REDESIGNED WAITING PAGE (Amber Radiant Theme with Subtle Animations) -->
@@ -989,7 +1043,16 @@
 
         // Errors
         errorName: "Please enter your full name.",
-        errorDefault: "Failed to submit access request. Please try again."
+        errorDefault: "Failed to submit access request. Please try again.",
+
+        // Voucher
+        dividerOr: "OR",
+        btnVoucherToggle: "🎟️ Login with Guest Voucher",
+        voucherLabel: "Guest Voucher Code",
+        voucherPlaceholder: "e.g. PASS-7842",
+        btnRedeem: "Activate Voucher",
+        btnRedeeming: "Verifying...",
+        errorVoucherEmpty: "Please enter your voucher code."
       },
       bn: {
         networkName: "নেটওয়ার্ক",
@@ -1032,7 +1095,16 @@
 
         // Errors
         errorName: "অনুগ্রহ করে আপনার পুরো নাম লিখুন।",
-        errorDefault: "অনুরোধ পাঠানো সম্ভব হয়নি। পুনরায় চেষ্টা করুন।"
+        errorDefault: "অনুরোধ পাঠানো সম্ভব হয়নি। পুনরায় চেষ্টা করুন।",
+
+        // Voucher
+        dividerOr: "অথবা",
+        btnVoucherToggle: "🎟️ গেস্ট ভাউচার কোড দিয়ে লগইন",
+        voucherLabel: "গেস্ট ভাউচার কোড",
+        voucherPlaceholder: "যেমন: PASS-7842",
+        btnRedeem: "ভাউচার সক্রিয় করুন",
+        btnRedeeming: "ভাউচার যাচাই হচ্ছে...",
+        errorVoucherEmpty: "অনুগ্রহ করে আপনার ভাউচার কোড লিখুন।"
       }
     };
 
@@ -1063,6 +1135,18 @@
       document.getElementById('labelName').textContent = t.labelName;
       document.getElementById('userName').placeholder = t.placeholderName;
       document.getElementById('btnText').textContent = t.btnSubmit;
+
+      // Voucher section
+      const dividerEl = document.getElementById('dividerOrText');
+      if (dividerEl) dividerEl.textContent = t.dividerOr;
+      const vToggleEl = document.getElementById('btnVoucherToggleText');
+      if (vToggleEl) vToggleEl.textContent = t.btnVoucherToggle;
+      const vLabelEl = document.getElementById('voucherLabel');
+      if (vLabelEl) vLabelEl.textContent = t.voucherLabel;
+      const vInputEl = document.getElementById('voucherCode');
+      if (vInputEl) vInputEl.placeholder = t.voucherPlaceholder;
+      const vRedeemEl = document.getElementById('btnRedeemText');
+      if (vRedeemEl) vRedeemEl.textContent = t.btnRedeem;
 
       // View 2: Waiting
       document.getElementById('waitingBadgeText').textContent = t.waitingBadge;
@@ -1288,6 +1372,65 @@
         setLoading(false);
       }
     });
+
+    // -------------------------------------------------------------------------
+    // Guest Voucher Redemption Flow
+    // -------------------------------------------------------------------------
+    const toggleVoucherBtn = document.getElementById('toggleVoucherBtn');
+    const voucherSection = document.getElementById('voucherSection');
+    const redeemVoucherBtn = document.getElementById('redeemVoucherBtn');
+    const voucherCodeInput = document.getElementById('voucherCode');
+    const voucherSpinner = document.getElementById('voucherSpinner');
+
+    if (toggleVoucherBtn && voucherSection) {
+      toggleVoucherBtn.addEventListener('click', () => {
+        const isHidden = voucherSection.style.display === 'none';
+        voucherSection.style.display = isHidden ? 'block' : 'none';
+        if (isHidden && voucherCodeInput) voucherCodeInput.focus();
+      });
+    }
+
+    if (redeemVoucherBtn && voucherCodeInput) {
+      redeemVoucherBtn.addEventListener('click', async () => {
+        errorAlert.style.display = 'none';
+        const code = voucherCodeInput.value.trim().toUpperCase();
+        const userName = (userNameInput && userNameInput.value.trim()) || 'Guest User';
+        const t = translations[currentLang];
+
+        if (!code) {
+          showError(t.errorVoucherEmpty || 'Please enter your voucher code.');
+          return;
+        }
+
+        redeemVoucherBtn.disabled = true;
+        if (voucherSpinner) voucherSpinner.style.display = 'inline-block';
+
+        try {
+          const res = await fetch('/api/voucher', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              code,
+              mac: clientMacAddress,
+              ip: resolvedIp || undefined,
+              name: userName
+            })
+          });
+
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data.error || 'Invalid or expired voucher code.');
+          }
+
+          showSuccessView(userName, data.duration || 120);
+        } catch (err) {
+          showError(err.message || 'ভাউচার সক্রিয় করা সম্ভব হয়নি।');
+        } finally {
+          redeemVoucherBtn.disabled = false;
+          if (voucherSpinner) voucherSpinner.style.display = 'none';
+        }
+      });
+    }
 
     function startWaitingView(name) {
       currentUserName = name;

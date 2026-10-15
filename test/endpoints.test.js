@@ -12,6 +12,7 @@ import confirmAuthHandler from '../api/confirm-auth.js';
 import statusHandler from '../api/status.js';
 import routerHandler, { isDangerousRouterCommand } from '../api/router.js';
 import deauthHandler from '../api/deauth.js';
+import voucherHandler from '../api/voucher.js';
 
 // Helper mock response factory
 function createMockRes() {
@@ -2088,6 +2089,82 @@ describe('API Endpoints Validation & Status Codes', () => {
       assert.equal(deleteCall.body.message_id, 888);
     } finally {
       globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('/api/voucher OPTIONS returns 200 with status ok', async () => {
+    const req = { method: 'OPTIONS' };
+    const res = createMockRes();
+    await voucherHandler(req, res);
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.body, { status: 'ok' });
+  });
+
+  test('/api/voucher rejects missing Redis credentials with 500', async () => {
+    delete process.env.UPSTASH_REDIS_REST_URL;
+    delete process.env.UPSTASH_REDIS_REST_TOKEN;
+    const req = { method: 'POST', body: {} };
+    const res = createMockRes();
+    await voucherHandler(req, res);
+    assert.equal(res.statusCode, 500);
+    assert.equal(res.body.error, 'Database configuration missing.');
+  });
+
+  test('/api/voucher GET rejects unauthorized requests when ADMIN_PASSWORD is set', async () => {
+    process.env.UPSTASH_REDIS_REST_URL = 'https://mock.upstash.io';
+    process.env.UPSTASH_REDIS_REST_TOKEN = 'mock-token';
+    process.env.ADMIN_PASSWORD = 'super_secret_admin';
+
+    const req = { method: 'GET', headers: {} };
+    const res = createMockRes();
+    await voucherHandler(req, res);
+    assert.equal(res.statusCode, 401);
+  });
+
+  test('/api/voucher POST rejects missing code or mac with 400', async () => {
+    process.env.UPSTASH_REDIS_REST_URL = 'https://mock.upstash.io';
+    process.env.UPSTASH_REDIS_REST_TOKEN = 'mock-token';
+
+    const req = { method: 'POST', body: { code: 'PASS-1234' } };
+    const res = createMockRes();
+    await voucherHandler(req, res);
+    assert.equal(res.statusCode, 400);
+  });
+
+  test('/api/voucher POST redeems voucher for captive portal guest', async () => {
+    process.env.UPSTASH_REDIS_REST_URL = 'https://mock.upstash.io';
+    process.env.UPSTASH_REDIS_REST_TOKEN = 'mock-token';
+
+    const enc = (s) => Buffer.from(String(s)).toString('base64');
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      const urlStr = String(url);
+      const isPipeline = urlStr.includes('/pipeline');
+      const bodyStr = String(opts?.body || '');
+
+      let resVal = 1;
+      if (bodyStr.includes('hgetall')) {
+        resVal = [enc('code'), enc('PASS-7842'), enc('duration'), enc('60'), enc('redeemed'), enc('false')];
+      }
+      const data = isPipeline ? [{ result: resVal }] : { result: resVal };
+      return new Response(JSON.stringify(data), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    };
+
+    try {
+      const req = {
+        method: 'POST',
+        body: { code: 'PASS-7842', mac: '46:84:b7:da:39:73', name: 'Tanvir' }
+      };
+      const res = createMockRes();
+      await voucherHandler(req, res);
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.ok, true);
+      assert.equal(res.body.duration, 60);
+    } finally {
+      globalThis.fetch = origFetch;
     }
   });
 });

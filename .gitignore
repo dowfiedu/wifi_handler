@@ -42,3 +42,10 @@ Thumbs.db
 # Testing & Coverage
 coverage/
 .nyc_output/
+
+# Flutter & Dart
+**/build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
