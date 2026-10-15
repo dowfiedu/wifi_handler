@@ -757,6 +757,22 @@ describe('API Endpoints Validation & Status Codes', () => {
       assert.equal(activeRes.statusCode, 200);
       assert.equal(activeRes.body.ok, true);
       assert.equal(activeRes.body.command, 'active');
+      // Test menu_report callback
+      const reportReq = {
+        method: 'POST',
+        body: {
+          callback_query: {
+            id: 'cb_menu_report',
+            data: 'menu_report',
+            message: { chat: { id: 12345 }, message_id: 102 }
+          }
+        }
+      };
+      const reportRes = createMockRes();
+      await webhookHandler(reportReq, reportRes);
+      assert.equal(reportRes.statusCode, 200);
+      assert.equal(reportRes.body.ok, true);
+      assert.equal(reportRes.body.command, 'report');
     } finally {
       globalThis.fetch = originalFetch;
     }
