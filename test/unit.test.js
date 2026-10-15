@@ -144,6 +144,9 @@ describe('api/webhook.js Callback Parsing', () => {
     assert.deepEqual(parseCallbackData('menu_users'), { action: 'menu', command: 'details' });
     assert.deepEqual(parseCallbackData('menu_clean'), { action: 'menu', command: 'clean' });
     assert.deepEqual(parseCallbackData('menu_auth'), { action: 'menu', command: 'auth' });
+    assert.deepEqual(parseCallbackData('menu_voucher'), { action: 'menu', command: 'voucher' });
+    assert.deepEqual(parseCallbackData('gen_voucher:60'), { action: 'gen_voucher', duration: 60 });
+    assert.deepEqual(parseCallbackData('gen_voucher:0'), { action: 'gen_voucher', duration: 0 });
   });
 
   test('parses unlim_sess, unlim_perm, and unlim_back callbacks correctly', () => {
@@ -582,16 +585,17 @@ describe('lib/bot-menu.js Helpers & Formatters', () => {
     assert.equal(buildActiveUsersKeyboard(null), null);
   });
 
-  test('TELEGRAM_MENU_KEYBOARD includes direct MAC auth option and persistent settings', () => {
+  test('TELEGRAM_MENU_KEYBOARD includes direct MAC auth option, guest voucher and persistent settings', () => {
     assert.equal(TELEGRAM_MENU_KEYBOARD.is_persistent, true);
     assert.equal(TELEGRAM_MENU_KEYBOARD.resize_keyboard, true);
     assert.equal(TELEGRAM_MENU_KEYBOARD.keyboard.length, 3);
-    assert.equal(TELEGRAM_MENU_KEYBOARD.keyboard[0].length, 1);
+    assert.equal(TELEGRAM_MENU_KEYBOARD.keyboard[0].length, 2);
     assert.equal(TELEGRAM_MENU_KEYBOARD.keyboard[1].length, 2);
     assert.equal(TELEGRAM_MENU_KEYBOARD.keyboard[2].length, 2);
-    // Verifies MAC authorize button is present and redundant dashboard button is omitted
+    // Verifies MAC authorize and guest voucher buttons are present
     const allButtons = TELEGRAM_MENU_KEYBOARD.keyboard.flat().map(b => b.text);
     assert.ok(allButtons.includes('➕ ম্যাক অথোরাইজ'));
+    assert.ok(allButtons.includes('🎟️ গেস্ট ভাউচার'));
     assert.ok(!allButtons.some(b => b.includes('ড্যাশবোর্ড')));
     assert.ok(allButtons.includes('🟢 অ্যাক্টিভ ইউজার'));
     assert.ok(allButtons.includes('🧹 ক্লিন চ্যাট ও ডাটা'));
@@ -643,6 +647,11 @@ describe('lib/bot-menu.js Helpers & Formatters', () => {
     assert.equal(normalizeCommandText('/auth'), 'auth');
     assert.equal(normalizeCommandText('➕ ম্যাক অথোরাইজ'), 'auth');
     assert.equal(normalizeCommandText('ম্যাক অথোরাইজ'), 'auth');
+    assert.equal(normalizeCommandText('/voucher'), 'voucher');
+    assert.equal(normalizeCommandText('🎟️ গেস্ট ভাউচার'), 'voucher');
+    assert.equal(normalizeCommandText('ভাউচার'), 'voucher');
+    assert.equal(normalizeCommandText('/report'), 'report');
+    assert.equal(normalizeCommandText('রিপোর্ট'), 'report');
     assert.equal(normalizeCommandText('something-else'), null);
   });
 
