@@ -232,15 +232,10 @@ get_conntrack_metrics() {
     _ct_max=$(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null || echo 15360)
     _ct_max=${_ct_max:-15360}
     if [ -f /proc/net/nf_conntrack ]; then
-        awk -v max="$_ct_max" '
-        { proto[$3]++; total++ }
-        END {
-            tcp = proto["tcp"] + 0
-            udp = proto["udp"] + 0
-            other = total - tcp - udp
-            if (other < 0) other = 0
-            pct = (max > 0) ? (total * 100.0 / max) : 0
-            printf "\"connections\":{\"total\":%d,\"max\":%d,\"tcp\":%d,\"udp\":%d,\"other\":%d,\"usage_percent\":%.1f}", total, max, tcp, udp, other, pct
+        awk -v max="$_ct_max" '{ proto[$3]++; total++ } END {
+            tcp = proto["tcp"] + 0; udp = proto["udp"] + 0; other = total - tcp - udp;
+            if (other < 0) other = 0; pct = (max > 0) ? (total * 100.0 / max) : 0;
+            printf "\"connections\":{\"total\":%d,\"max\":%d,\"tcp\":%d,\"udp\":%d,\"other\":%d,\"usage_percent\":%.1f}", total, max, tcp, udp, other, pct;
         }' /proc/net/nf_conntrack 2>/dev/null
     else
         _cnt=$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null || echo 150)

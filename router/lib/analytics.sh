@@ -67,10 +67,7 @@ get_bandwidth_quota_metrics() {
 BEGIN { first = 1; printf "["; }
 FILENAME ~ /\.cg_/ {
     if ($1 == "Station") { cur = tolower($2); next; }
-    if (cur != "") {
-        if ($1 == "rx" && $2 == "bytes:") tx[cur] = $3;
-        else if ($1 == "tx" && $2 == "bytes:") rx[cur] = $3;
-    }
+    if (cur != "") { if ($1 == "rx" && $2 == "bytes:") tx[cur] = $3; else if ($1 == "tx" && $2 == "bytes:") rx[cur] = $3; }
     next;
 }
 FILENAME ~ /dhcp\.leases$/ { m = tolower($2); ip[m] = $3; host[m] = $4; next; }
@@ -88,10 +85,7 @@ END {
         [ -z "$_clients_json" ] && _clients_json="[]"
     fi
 
-    _tot_rx=${_tot_rx:-0}
-    _tot_tx=${_tot_tx:-0}
-    _total_used=$((_tot_rx + _tot_tx))
-
+    _tot_rx=${_tot_rx:-0}; _tot_tx=${_tot_tx:-0}; _total_used=$((_tot_rx + _tot_tx))
     printf '"analytics":{"quota":{"total_gb":%s,"used_bytes":%s,"rx_bytes":%s,"tx_bytes":%s,"reset_day":%s,"warning_percent":%s,"wrtbwmon_active":%s},"wrtbwmon_clients":%s}' \
         "$_quota_gb" "$_total_used" "$_tot_rx" "$_tot_tx" "$_reset_day" "$_warn_pct" "$_wrt_active" "$_clients_json"
 }
@@ -138,21 +132,15 @@ get_crontab_metrics() {
 
 get_smart_home_metrics() {
     _ha_enabled="false"
-    _ha_webhook="http://homeassistant.local:8123/api/webhook/archer_c6_presence"
-    _ha_macs="3c:22:fb:1a:2b:3c,a4:c3:f0:88:99:11"
-    _mqtt_enabled="false"
-    _mqtt_broker="192.168.1.120:1883"
-    _mqtt_topic="homeassistant/sensor/archer_c6"
+    _ha_webhook="http://homeassistant.local:8123/api/webhook/archer_c6_presence"; _ha_macs="3c:22:fb:1a:2b:3c,a4:c3:f0:88:99:11"
+    _mqtt_enabled="false"; _mqtt_broker="192.168.1.120:1883"; _mqtt_topic="homeassistant/sensor/archer_c6"
 
     if command -v uci >/dev/null 2>&1; then
         [ "$(uci get archer_guard.ha.enabled 2>/dev/null)" = "1" ] && _ha_enabled="true"
-        _wh=$(uci get archer_guard.ha.webhook 2>/dev/null)
-        [ -n "$_wh" ] && _ha_webhook="$_wh"
-        _mc=$(uci get archer_guard.ha.macs 2>/dev/null)
-        [ -n "$_mc" ] && _ha_macs="$_mc"
+        _wh=$(uci get archer_guard.ha.webhook 2>/dev/null) && [ -n "$_wh" ] && _ha_webhook="$_wh"
+        _mc=$(uci get archer_guard.ha.macs 2>/dev/null) && [ -n "$_mc" ] && _ha_macs="$_mc"
         [ "$(uci get archer_guard.mqtt.enabled 2>/dev/null)" = "1" ] && _mqtt_enabled="true"
-        _mb=$(uci get archer_guard.mqtt.broker 2>/dev/null)
-        [ -n "$_mb" ] && _mqtt_broker="$_mb"
+        _mb=$(uci get archer_guard.mqtt.broker 2>/dev/null) && [ -n "$_mb" ] && _mqtt_broker="$_mb"
     fi
 
     printf '"smart_home":{"home_assistant":{"enabled":%s,"webhook_url":"%s","tracked_macs":"%s"},"mqtt":{"enabled":%s,"broker":"%s","topic":"%s"}}' \
@@ -173,66 +161,44 @@ handle_analytics_action() {
             if command -v uci >/dev/null 2>&1; then
                 touch /etc/config/archer_guard 2>/dev/null
                 uci set archer_guard.quota=section 2>/dev/null
-                uci set archer_guard.quota.total_gb="$_q_gb"
-                uci set archer_guard.quota.reset_day="$_q_day"
-                uci set archer_guard.quota.warn_pct="$_q_warn"
-                uci commit archer_guard 2>/dev/null
+                uci set archer_guard.quota.total_gb="$_q_gb" && uci set archer_guard.quota.reset_day="$_q_day" && uci set archer_guard.quota.warn_pct="$_q_warn" && uci commit archer_guard 2>/dev/null
             fi
             rm -f /tmp/c6_status.json /tmp/c6_status.lock 2>/dev/null
             _a_msg="Bandwidth quota updated: $_q_gb GB (Reset day $_q_day)"
             ;;
         "reset_quota")
-            if command -v wrtbwmon >/dev/null 2>&1; then
-                wrtbwmon reset 2>/dev/null
-            else
-                rm -f /tmp/usage.db /tmp/wrtbwmon/usage.db /tmp/wrtbwmon.db 2>/dev/null
-            fi
-            _wan_l=$(awk '$1 == "wan:" { print; exit }' /proc/net/dev 2>/dev/null)
-            [ -z "$_wan_l" ] && _wan_l=$(awk '$1 == "pppoe-wan:" { print; exit }' /proc/net/dev 2>/dev/null)
-            [ -z "$_wan_l" ] && _wan_l=$(awk '$1 == "eth0:" { print; exit }' /proc/net/dev 2>/dev/null)
+            command -v wrtbwmon >/dev/null 2>&1 && wrtbwmon reset 2>/dev/null || rm -f /tmp/usage.db /tmp/wrtbwmon/usage.db /tmp/wrtbwmon.db 2>/dev/null
+            _wan_l=$(awk '$1 ~ /^(wan|pppoe-wan|eth0):/ { print; exit }' /proc/net/dev 2>/dev/null)
             if [ -n "$_wan_l" ] && command -v uci >/dev/null 2>&1; then
                 _rx_b=$(printf "%s" "$_wan_l" | awk '{print $2}' | tr -cd '0-9')
                 _tx_b=$(printf "%s" "$_wan_l" | awk '{print $10}' | tr -cd '0-9')
                 touch /etc/config/archer_guard 2>/dev/null
                 uci set archer_guard.quota=section 2>/dev/null
-                uci set archer_guard.quota.rx_offset="${_rx_b:-0}" 2>/dev/null
-                uci set archer_guard.quota.tx_offset="${_tx_b:-0}" 2>/dev/null
-                uci commit archer_guard 2>/dev/null
+                uci set archer_guard.quota.rx_offset="${_rx_b:-0}" 2>/dev/null && uci set archer_guard.quota.tx_offset="${_tx_b:-0}" 2>/dev/null && uci commit archer_guard 2>/dev/null
             fi
             rm -f /tmp/c6_status.json /tmp/c6_status.lock 2>/dev/null
             _a_msg="Bandwidth usage database reset"
             ;;
         "set_client_quota")
-            _a_mac="$_a_target"
-            _a_cap="${_a_val:-10}"
-            _a_act=$(extract_param "action" "$_a_payload")
+            _a_mac="$_a_target"; _a_cap="${_a_val:-10}"; _a_act=$(extract_param "action" "$_a_payload")
             _a_msg="Device quota for $_a_mac set to $_a_cap GB (Action: ${_a_act:-notify})"
             ;;
         "toggle_cron_task")
-            _task="$_a_target"
-            _state="$_a_val"
-            _cron_f="/etc/crontabs/root"
-            mkdir -p /etc/crontabs 2>/dev/null
-            touch "$_cron_f" 2>/dev/null
-
+            _task="$_a_target"; _state="$_a_val"; _cron_f="/etc/crontabs/root"
+            mkdir -p /etc/crontabs 2>/dev/null && touch "$_cron_f" 2>/dev/null
             case "$_task" in
                 "midnight_reboot")
-                    # Remove existing reboot line
                     sed -i '/\/sbin\/reboot/d' "$_cron_f" 2>/dev/null
                     if [ "$_state" = "1" ] || [ "$_state" = "on" ] || [ "$_state" = "true" ]; then
-                        echo "0 4 * * * /sbin/reboot" >> "$_cron_f"
-                        _a_msg="Midnight Auto-Reboot scheduled for 04:00 AM"
+                        echo "0 4 * * * /sbin/reboot" >> "$_cron_f"; _a_msg="Midnight Auto-Reboot scheduled for 04:00 AM"
                     else
                         _a_msg="Midnight Auto-Reboot disabled"
                     fi
                     ;;
                 "wifi_sleep")
-                    sed -i '/wifi[[:space:]]\+down/d' "$_cron_f" 2>/dev/null
-                    sed -i '/wifi[[:space:]]\+up/d' "$_cron_f" 2>/dev/null
+                    sed -i '/wifi[[:space:]]\+down/d' "$_cron_f" 2>/dev/null; sed -i '/wifi[[:space:]]\+up/d' "$_cron_f" 2>/dev/null
                     if [ "$_state" = "1" ] || [ "$_state" = "on" ] || [ "$_state" = "true" ]; then
-                        echo "0 1 * * * /sbin/wifi down" >> "$_cron_f"
-                        echo "0 7 * * * /sbin/wifi up" >> "$_cron_f"
-                        _a_msg="Nocturnal Wi-Fi sleep scheduled (01:00 AM - 07:00 AM)"
+                        echo "0 1 * * * /sbin/wifi down" >> "$_cron_f"; echo "0 7 * * * /sbin/wifi up" >> "$_cron_f"; _a_msg="Nocturnal Wi-Fi sleep scheduled (01:00 AM - 07:00 AM)"
                     else
                         _a_msg="Nocturnal Wi-Fi sleep disabled"
                     fi
@@ -240,8 +206,7 @@ handle_analytics_action() {
                 "nightly_flush")
                     sed -i '/drop_caches/d' "$_cron_f" 2>/dev/null
                     if [ "$_state" = "1" ] || [ "$_state" = "on" ] || [ "$_state" = "true" ]; then
-                        echo "30 3 * * * sync && echo 3 > /proc/sys/vm/drop_caches" >> "$_cron_f"
-                        _a_msg="Nightly cache flush scheduled for 03:30 AM"
+                        echo "30 3 * * * sync && echo 3 > /proc/sys/vm/drop_caches" >> "$_cron_f"; _a_msg="Nightly cache flush scheduled for 03:30 AM"
                     else
                         _a_msg="Nightly cache flush disabled"
                     fi
@@ -250,13 +215,10 @@ handle_analytics_action() {
             /etc/init.d/cron restart >/dev/null 2>&1 &
             ;;
         "set_homeassistant_webhook")
-            _wh_url="$_a_val"
-            _macs=$(extract_param "tracked_macs" "$_a_payload")
-            _en=$(extract_param "enabled" "$_a_payload")
+            _wh_url="$_a_val"; _macs=$(extract_param "tracked_macs" "$_a_payload"); _en=$(extract_param "enabled" "$_a_payload")
             [ -z "$_en" ] && _en="1"
             if command -v uci >/dev/null 2>&1; then
-                uci set archer_guard.ha=section 2>/dev/null
-                uci set archer_guard.ha.enabled="$_en"
+                uci set archer_guard.ha=section 2>/dev/null && uci set archer_guard.ha.enabled="$_en"
                 [ -n "$_wh_url" ] && uci set archer_guard.ha.webhook="$_wh_url"
                 [ -n "$_macs" ] && uci set archer_guard.ha.macs="$_macs"
                 uci commit archer_guard 2>/dev/null
