@@ -1112,6 +1112,7 @@
     let currentUserName = '';
     let currentDuration = 0;
     let waitingSeconds = 0;
+    let authorizedWaitCount = 0;
     let elapsedTimer = null;
     let pollTimer = null;
     let activeViewId = 'requestView';
@@ -1436,6 +1437,7 @@
       currentUserName = name;
       document.getElementById('waitingName').textContent = name;
       waitingSeconds = 0;
+      authorizedWaitCount = 0;
       updateTimerDisplay();
 
       switchView('waitingView');
@@ -1464,9 +1466,20 @@
         const data = await res.json();
         const status = String(data.status || '').toLowerCase();
 
-        if (status === 'authorized' || status === 'authenticated') {
+        if (status === 'authenticated') {
           stopAllTimers();
           showSuccessView(data.name || currentUserName, data.duration);
+        } else if (status === 'authorized') {
+          // Admin approved in Telegram; waiting for router sync to confirm firewall authorization
+          authorizedWaitCount++;
+          const waitingStatus = document.getElementById('waitingStatusText');
+          if (waitingStatus) {
+            waitingStatus.textContent = currentLang === 'bn' ? 'অনুমোদিত! রাউটারে সংযোগ সক্রিয় হচ্ছে...' : 'Approved! Activating router...';
+          }
+          if (authorizedWaitCount >= 4) {
+            stopAllTimers();
+            showSuccessView(data.name || currentUserName, data.duration);
+          }
         } else if (status === 'terminated' || status === 'rejected') {
           stopAllTimers();
           showRejectedView(data.name || currentUserName);
@@ -1482,6 +1495,23 @@
       document.getElementById('successName').textContent = currentUserName;
       updateDurationDisplay(duration);
       switchView('successView');
+
+      // Trigger captive network assistant connectivity probe
+      try {
+        fetch('http://connectivitycheck.gstatic.com/generate_204', { mode: 'no-cors', cache: 'no-store' }).catch(() => {});
+        fetch('http://captive.apple.com/hotspot-detect.html', { mode: 'no-cors', cache: 'no-store' }).catch(() => {});
+      } catch (e) {}
+
+      // Auto-dismiss or set browse button to HTTP endpoint so OS closes CNA cleanly
+      const btnBrowse = document.getElementById('btnStartBrowsing');
+      if (btnBrowse) {
+        btnBrowse.removeAttribute('target');
+        btnBrowse.href = 'http://connectivitycheck.gstatic.com/generate_204';
+        btnBrowse.onclick = (e) => {
+          e.preventDefault();
+          window.location.href = 'http://connectivitycheck.gstatic.com/generate_204';
+        };
+      }
     }
 
     function showRejectedView(name) {

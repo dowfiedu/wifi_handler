@@ -206,13 +206,22 @@ Edit `/etc/config/opennds` on your router:
 ```uci
 config opennds
     option enabled '1'
-    option faskey 'none'
+    option allow_preemptive_authentication '1'
+    option fasremotefqdn 'your-domain.vercel.app'
     option fasport '443'
-    option fasremoteurl 'https://your-domain.vercel.app/'
     option faspath '/'
-    option preauth 'https://your-domain.vercel.app/'
+    option fas_secure_enabled '1'
+    option faskey 'none'
 ```
-*(Or specify `preauth` if using openNDS preauth redirect mode. openNDS will automatically redirect captive clients to `https://your-domain.vercel.app/?clientmac=<MAC>&clientip=<IP>`)*.
+*(Note: `option allow_preemptive_authentication '1'` is critical. It allows `ndsctl auth <MAC>` from the Telegram bot to immediately authorize clients even if their device went idle or temporarily timed out of the pre-authenticated table).*
+
+Also, ensure IPv6 router advertisements are disabled on the captive LAN interface so mobile phones don't bypass or loop:
+```sh
+uci set dhcp.lan.ra='disabled'
+uci set dhcp.lan.dhcpv6='disabled'
+uci commit dhcp
+/etc/init.d/odhcpd restart
+```
 
 Reload openNDS:
 ```sh

@@ -29,6 +29,12 @@ scp -O -q "$SCRIPT_DIR/archer_c6_helper.sh" "$ROUTER_USER@$ROUTER_IP":/www/cgi-b
 printf "🔒 Setting execution permissions & refreshing uhttpd...\n"
 ssh -q "$ROUTER_USER@$ROUTER_IP" "chmod +x /www/cgi-bin/api /usr/lib/archer_guard/*.sh && /etc/init.d/uhttpd reload"
 
+# 4b. Sync Modern Pro Theme Enhancements (if present)
+if [ -f "$SCRIPT_DIR/modern-enhancements.css" ]; then
+    printf "🎨 Syncing Modern Pro UI Enhancements to Proton2025 theme...\n"
+    scp -O -q "$SCRIPT_DIR/modern-enhancements.css" "$ROUTER_USER@$ROUTER_IP":/www/luci-static/proton2025/css/ 2>/dev/null
+fi
+
 # 5. Configure Smart WAN LED Hotplug & Smooth LED Intervals (LAN & Wi-Fi)
 printf "💡 Configuring Smart WAN & Smooth LED triggers (LAN & Wi-Fi)...\n"
 if [ -f "$SCRIPT_DIR/lib/99-wan-led" ]; then

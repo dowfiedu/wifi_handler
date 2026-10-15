@@ -216,7 +216,11 @@ while true; do
                         confirm_action "$cmd" "$_untrust_mac" "success" "Untrusted"
                         ;;
                     ndsctl\ auth\ *)
-                        confirm_action "$cmd" "$(printf '%s' "$cmd" | awk '{print $3}')" "success" "Authenticated"
+                        _auth_mac=$(printf '%s' "$cmd" | awk '{print $3}')
+                        case "$out" in
+                            *"not found"*|*"failed"*|*"error"*) confirm_action "$cmd" "$_auth_mac" "failed" "$out" ;;
+                            *) confirm_action "$cmd" "$_auth_mac" "success" "Authenticated" ;;
+                        esac
                         ;;
                     reboot)
                         ;;

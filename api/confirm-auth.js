@@ -115,7 +115,10 @@ export default async function handler(req, res) {
           updatedAt: nowIso
         };
         const cmdStr = (command || '').toLowerCase();
-        if (!command || cmdStr.startsWith('ndsctl auth') || cmdStr.startsWith('ndsctl trust')) {
+        if (status === 'failed') {
+          updateData.status = 'FAILED';
+          updateData.errorDetails = details || 'Router execution failed';
+        } else if (!command || cmdStr.startsWith('ndsctl auth') || cmdStr.startsWith('ndsctl trust')) {
           updateData.status = 'AUTHENTICATED';
           updateData.authenticatedAt = nowIso;
         } else if (cmdStr.startsWith('ndsctl deauth')) {
@@ -152,6 +155,6 @@ export default async function handler(req, res) {
     success: true,
     mac: cleanMac,
     command: command || null,
-    status: cleanMac && (!command || command.startsWith('ndsctl auth')) ? 'AUTHENTICATED' : 'CONFIRMED'
+    status: status === 'failed' ? 'FAILED' : (cleanMac && (!command || command.startsWith('ndsctl auth')) ? 'AUTHENTICATED' : 'CONFIRMED')
   });
 }
