@@ -1367,10 +1367,21 @@ describe('Telegram Bot Interactive Menu & Action Integrations', () => {
     const helpRes = await processMenuCommand('help', redis);
     assert.ok(helpRes.text.includes('ক্যাপটিভ পোর্টাল ও বট সহায়িকা'));
     assert.ok(helpRes.text.includes('রাউটার রিবুট'));
+    assert.equal(helpRes.replyMarkup, null); // Strictly no redundant 10-button menu
     assert.equal(helpRes.ackText, '📖 হেল্প গাইড');
+
+    const prevRes = await processMenuCommand('previous', redis);
+    assert.equal(prevRes.replyMarkup, null); // Strictly no redundant 10-button menu
+
+    const reportRes = await processMenuCommand('report', redis);
+    assert.equal(reportRes.replyMarkup.inline_keyboard[0][0].callback_data, 'menu_report'); // Single refresh button
+
+    const detailsRes = await processMenuCommand('details', redis);
+    assert.equal(detailsRes.replyMarkup, null); // No cluttered deauth list or menu when 0 active
 
     const renameRes = await processMenuCommand('rename', redis);
     assert.ok(renameRes.text.includes('ডিভাইসের নাম পরিবর্তন'));
+    assert.equal(renameRes.replyMarkup.inline_keyboard[0][0].callback_data, 'menu_active');
     assert.equal(renameRes.ackText, '🏷️ ডিভাইস রিনেম');
   });
 
