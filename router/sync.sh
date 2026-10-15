@@ -82,6 +82,15 @@ parse_mac() {
 }
 
 is_command_safe() {
+    # ANTI-BRICK: strictly block dangerous flashing, disk wipe, or LAN lockout commands
+    case "$1" in
+        *mtd*|*flash_*|*fw_setenv*|*dd\ *|*mkfs*|*fdisk*|*parted*|*rm\ -rf*|*network.lan*|*ifdown\ lan*|*br-lan\ down*|*dhcp.lan.ignore*|*passwd*|*shadow*|*inittab*|*\:\(\)\{*) return 1 ;;
+        *sysupgrade*)
+            case "$1" in
+                sysupgrade\ -b\ *) ;;
+                *) return 1 ;;
+            esac ;;
+    esac
     case "$1" in
         ndsctl\ auth\ [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]\ [0-9]*) return 0 ;;
         ndsctl\ deauth\ [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]) return 0 ;;
@@ -110,6 +119,8 @@ is_command_safe() {
         uci\ set\ mwan3.*) return 0 ;;
         /etc/init.d/mwan3\ *) return 0 ;;
         /etc/init.d/https-dns-proxy\ *) return 0 ;;
+        *network.wan*peerdns*|*network.wan*dns*|*/etc/init.d/network\ reload*) return 0 ;;
+        sysupgrade\ -b\ *|tar\ -czf\ /tmp/backup-OpenWrt-c6.tar.gz*) return 0 ;;
         uci\ set\ archer_guard.*) return 0 ;;
         uci\ commit\ archer_guard*) return 0 ;;
         wrtbwmon\ *) return 0 ;;
@@ -140,29 +151,9 @@ confirm_auth() {
     log "INFO" "Confirmed auth for MAC: $_mac"
 }
 
-report_telemetry() {
-    _report_url="${STATUS_URL:-$(printf '%s' "$API_URL" | sed 's/\(poll\|pending-auth\)/router/')}"
-    _metrics=""
-    if [ -f /www/cgi-bin/api ]; then
-        _metrics=$(REQUEST_METHOD=GET QUERY_STRING="action=status" X_ROUTER_SECRET="$ROUTER_SECRET_KEY" sh /www/cgi-bin/api 2>/dev/null | sed -n '/^{/,$p')
-    elif command -v uclient-fetch >/dev/null 2>&1; then
-        _metrics=$(uclient-fetch -q --timeout=3 --header="X-Router-Secret: $ROUTER_SECRET_KEY" -O - "http://127.0.0.1/cgi-bin/api?action=status" 2>/dev/null)
-    elif command -v curl >/dev/null 2>&1; then
-        _metrics=$(curl -s -m 3 -H "X-Router-Secret: $ROUTER_SECRET_KEY" "http://127.0.0.1/cgi-bin/api?action=status" 2>/dev/null)
-    fi
-
-    if [ -n "$_metrics" ] && [ "${_metrics#"{"}" != "$_metrics" ]; then
-        http_post "$_report_url" "{\"action\":\"report_status\",\"status\":$_metrics}" "application/json"
-        log "INFO" "Pushed live router telemetry to Cloud Bridge."
-    fi
-}
-
 trap 'log "INFO" "Stopping sync daemon."; exit 0' INT TERM
 
 log "INFO" "Starting openNDS sync service on $API_URL (Interval: ${POLL_INTERVAL}s)"
-
-_loop_count=0
-_report_interval="${REPORT_INTERVAL:-30}"
 
 while true; do
     _connected_macs=$(get_connected_macs)
@@ -231,13 +222,6 @@ while true; do
                 confirm_auth "$mac"
             fi
         fi
-    fi
-
-    # Periodic telemetry reporting
-    _loop_count=$((_loop_count + POLL_INTERVAL))
-    if [ "$_loop_count" -ge "$_report_interval" ]; then
-        _loop_count=0
-        report_telemetry
     fi
 
     sleep "$POLL_INTERVAL"

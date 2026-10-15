@@ -70,6 +70,45 @@ export function checkRouterAuth(req, secretKey) {
   return false;
 }
 
+/**
+ * Anti-Brick Command Verifier:
+ * Inspects shell commands before execution or enqueuing to prevent
+ * flash memory corruption, bootloader destruction, or permanent LAN lockout.
+ *
+ * @param {string} cmd - Command string to check
+ * @returns {boolean} - true if command contains dangerous operations
+ */
+export function isDangerousRouterCommand(cmd) {
+  if (!cmd || typeof cmd !== 'string') return false;
+  const lower = cmd.toLowerCase().trim();
+  if (lower.startsWith('sysupgrade -b ')) return false;
+
+  const dangerousPatterns = [
+    /\bmtd\b/i,
+    /\bsysupgrade\b/i,
+    /\bflash_erase\b/i,
+    /\bflashcp\b/i,
+    /\bfw_setenv\b/i,
+    /\bdd\s+if=/i,
+    /\/dev\/mtd/i,
+    /\/dev\/mmcblk/i,
+    /\bmkfs\b/i,
+    /\bfdisk\b/i,
+    /\bparted\b/i,
+    /rm\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r|--recursive)/i,
+    /network\.lan/i,
+    /ifdown\s+lan/i,
+    /ip\s+link\s+set\s+br-lan\s+down/i,
+    /br-lan\s+down/i,
+    /dhcp\.lan\.ignore/i,
+    /\/etc\/init\.d\/network\s+stop/i,
+    /:\(\)\s*\{\s*:\|:&\s*\};:/,
+    /\b(passwd|shadow|inittab)\b/i
+  ];
+
+  return dangerousPatterns.some(p => p.test(lower));
+}
+
 // Dynamic simulation state for realistic live telemetry in dev/test/cloud mode
 const simState = {
   lastTs: Date.now(),
@@ -314,9 +353,11 @@ export function getSimulatedStatus() {
       },
       wan_details: {
         gateway: '103.145.12.1',
-        dns: '1.1.1.1, 8.8.8.8',
+        dns: simState.customDns || '1.1.1.1, 8.8.8.8',
         mtu: 1492,
-        protocol: 'PPPoE (Fiber Optic ONU)'
+        protocol: 'PPPoE (Fiber Optic ONU)',
+        latency_ms: 8.5,
+        jitter_ms: 0.9
       }
     },
     analytics: {
@@ -598,7 +639,7 @@ export default async function handler(req, res) {
     }
 
     // B. Enqueuing hardware commands for the Archer C6
-    const { command, target, value } = payload;
+    const { command, target, value, extra } = payload;
     if (!command || typeof command !== 'string') {
       return res.status(400).json({ error: 'Field "command" is required.' });
     }
@@ -650,7 +691,16 @@ export default async function handler(req, res) {
       case 'set_wifi_ssid': {
         const iface = target && /^[a-zA-Z0-9_@.-]+$/.test(target) ? target : 'default_radio0';
         const cleanSsid = typeof value === 'string' ? value.replace(/['"\\]/g, '').substring(0, 32) : 'Archer_C6';
-        routerCmd = `uci set wireless.${iface}.ssid='${cleanSsid}' && uci commit wireless && wifi reload`;
+        let extraCmds = '';
+        if (extra && extra.key && typeof extra.key === 'string') {
+          const cleanKey = extra.key.replace(/['"\\]/g, '').substring(0, 64);
+          extraCmds += ` && uci set wireless.${iface}.key='${cleanKey}'`;
+        }
+        if (extra && extra.hidden !== undefined) {
+          const hidVal = (extra.hidden === '1' || extra.hidden === 1 || extra.hidden === true) ? '1' : '0';
+          extraCmds += ` && uci set wireless.${iface}.hidden='${hidVal}'`;
+        }
+        routerCmd = `uci set wireless.${iface}.ssid='${cleanSsid}'${extraCmds} && uci commit wireless && wifi reload`;
         break;
       }
 
@@ -763,7 +813,8 @@ export default async function handler(req, res) {
 
       case 'set_hw_offload': {
         const flag = (value === 'on' || value === '1' || value === true) ? '1' : '0';
-        routerCmd = `uci set firewall.@defaults[0].flow_offloading='${flag}' && uci set firewall.@defaults[0].flow_offloading_hw='${flag}' && uci commit firewall && /etc/init.d/firewall restart`;
+        // ANTI-BRICK: MediaTek MT7621 hardware offload triggers fatal FIFO lockup. Software offload is used.
+        routerCmd = `uci set firewall.@defaults[0].flow_offloading='${flag}' && uci set firewall.@defaults[0].flow_offloading_hw='0' && uci commit firewall && /etc/init.d/firewall restart`;
         break;
       }
 
@@ -774,9 +825,15 @@ export default async function handler(req, res) {
       }
 
       case 'set_sqm_limits': {
-        const qdisc = target && ['cake', 'fq_codel'].includes(target) ? target : 'cake';
-        const dl = parseInt(value && typeof value === 'object' ? value.download : value, 10) || 95000;
-        const ul = parseInt(value && typeof value === 'object' ? value.upload : target, 10) || 20000;
+        const qdisc = (target && ['cake', 'fq_codel'].includes(target))
+          ? target
+          : (req.body.qdisc && ['cake', 'fq_codel'].includes(req.body.qdisc) ? req.body.qdisc : 'cake');
+        let parsedVal = value;
+        if (typeof value === 'string' && value.startsWith('{')) {
+          try { parsedVal = JSON.parse(value); } catch (_) {}
+        }
+        const dl = parseInt(parsedVal && typeof parsedVal === 'object' ? parsedVal.download : (req.body.download || value), 10) || 95000;
+        const ul = parseInt(parsedVal && typeof parsedVal === 'object' ? parsedVal.upload : (req.body.upload || target), 10) || 20000;
         routerCmd = `uci set sqm.@queue[0].qdisc='${qdisc}' && uci set sqm.@queue[0].download='${dl}' && uci set sqm.@queue[0].upload='${ul}' && uci commit sqm && /etc/init.d/sqm restart`;
         break;
       }
@@ -801,6 +858,29 @@ export default async function handler(req, res) {
         break;
       }
 
+      case 'set_dns': {
+        const primary = (req.body.primary || value || '').trim();
+        const secondary = (req.body.secondary || target || '').trim();
+        const ipv4Regex = /^([0-9]{1,3}\.){3}[0-9]{1,3}$/;
+        if (primary && primary !== 'auto') {
+          if (!ipv4Regex.test(primary) || (secondary && !ipv4Regex.test(secondary))) {
+            return res.status(400).json({ error: 'Invalid DNS IP address format.' });
+          }
+          const list = [primary];
+          if (secondary) list.push(secondary);
+          const uciList = list.map(d => `uci add_list network.wan.dns='${d}'`).join(' && ');
+          routerCmd = `uci set network.wan.peerdns='0' && uci delete network.wan.dns 2>/dev/null && ${uciList} && uci commit network && /etc/init.d/network reload`;
+          simState.customDns = list.join(', ');
+        } else {
+          routerCmd = `uci set network.wan.peerdns='1' && uci delete network.wan.dns 2>/dev/null && uci commit network && /etc/init.d/network reload`;
+          simState.customDns = null;
+        }
+        if (globalThis.__localRouterStatus?.network?.wan_details) {
+          globalThis.__localRouterStatus.network.wan_details.dns = simState.customDns || '1.1.1.1, 8.8.8.8';
+        }
+        break;
+      }
+
       case 'set_quota': {
         const quotaGb = parseInt(value, 10) || 50;
         const resetDay = parseInt(req.body.reset_day || (typeof target === 'number' ? target : 1), 10) || 1;
@@ -816,6 +896,7 @@ export default async function handler(req, res) {
           globalThis.__localRouterStatus.analytics.quota.reset_day = resetDay;
           globalThis.__localRouterStatus.analytics.quota.warning_percent = warnPct;
         }
+        globalThis.__localRouterStatusTimestamp = 0;
 
         if (redis) {
           try {
@@ -846,6 +927,7 @@ export default async function handler(req, res) {
           globalThis.__localRouterStatus.analytics.quota.rx_bytes = 0;
           globalThis.__localRouterStatus.analytics.quota.tx_bytes = 0;
         }
+        globalThis.__localRouterStatusTimestamp = 0;
         if (redis) {
           try {
             const cached = await redis.get('router:latest_status');
@@ -921,8 +1003,34 @@ export default async function handler(req, res) {
 
       case 'raw_cmd': {
         const rawCmd = (value && typeof value === 'string') ? value.trim() : (target && typeof target === 'string' ? target.trim() : 'uptime');
+        if (isDangerousRouterCommand(rawCmd)) {
+          return res.status(403).json({
+            error: 'SAFETY LOCK ACTIVATED: This command contains operations that could damage firmware or disrupt LAN access.',
+            blocked: true,
+            command: cleanCmd
+          });
+        }
         routerCmd = rawCmd;
         simulatedOutput = getSimulatedTerminalOutput(rawCmd);
+        break;
+      }
+
+      case 'set_smp_steering': {
+        const enabled = (value === '1' || value === 'true' || value === 'on');
+        routerCmd = enabled
+          ? `for q in /sys/class/net/*/queues/rx-*/rps_cpus; do [ -e "$q" ] && echo "f" > "$q" 2>/dev/null; done && uci set system.@system[0].smp_steering='1' && uci commit system`
+          : `for q in /sys/class/net/*/queues/rx-*/rps_cpus; do [ -e "$q" ] && echo "0" > "$q" 2>/dev/null; done && uci set system.@system[0].smp_steering='0' && uci commit system`;
+        break;
+      }
+
+      case 'set_wps_action': {
+        const action = (value && typeof value === 'string') ? value.replace(/['"\\]/g, '') : 'Toggle 5G Wi-Fi';
+        routerCmd = `uci set system.@system[0].wps_action='${action}' && uci commit system`;
+        break;
+      }
+
+      case 'backup_config': {
+        routerCmd = `sysupgrade -b /tmp/backup-OpenWrt-c6.tar.gz || tar -czf /tmp/backup-OpenWrt-c6.tar.gz -C / etc/config etc/shadow`;
         break;
       }
 

@@ -120,7 +120,7 @@ export function parseCallbackData(data) {
   if (trimmed.startsWith('menu_') || trimmed.startsWith('menu:')) {
     const rawCmd = trimmed.slice(5).trim().toLowerCase();
     const normalizedCmd = rawCmd === 'history' ? 'previous' : (rawCmd === 'users' ? 'details' : rawCmd);
-    if (['dashboard', 'active', 'previous', 'details', 'clean'].includes(normalizedCmd)) {
+    if (['dashboard', 'active', 'previous', 'details', 'clean', 'auth'].includes(normalizedCmd)) {
       return { action: 'menu', command: normalizedCmd };
     }
     return null;
@@ -219,14 +219,24 @@ export function parseCustomAuthMessage(text, replyToText = null) {
   const directAuth = trimmed.match(/^\/(?:auth|approve)\s+((?:[0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2})(?:\s+(\d+))?/i);
   if (directAuth) {
     const mac = directAuth[1].toLowerCase().replace(/-/g, ':');
-    const duration = directAuth[2] !== undefined ? parseInt(directAuth[2], 10) : 60;
-    return { action: 'auth', mac, duration };
+    if (directAuth[2] !== undefined) {
+      const duration = parseInt(directAuth[2], 10);
+      return { action: 'auth', mac, duration };
+    }
+    return { action: 'prompt_duration', mac };
   }
 
   const directDeauth = trimmed.match(/^\/(?:deauth|reject|kick)\s+((?:[0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2})/i);
   if (directDeauth) {
     const mac = directDeauth[1].toLowerCase().replace(/-/g, ':');
     return { action: 'deauth', mac, duration: null };
+  }
+
+  // 1.1 Direct Bare MAC address: e.g. "46:84:b7:da:39:73" or "mac: AA-BB-CC-DD-EE-FF"
+  const bareMacMatch = trimmed.match(/^(?:mac\s*[:=-]?\s*)?((?:[0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2})$/i);
+  if (bareMacMatch) {
+    const mac = bareMacMatch[1].toLowerCase().replace(/-/g, ':');
+    return { action: 'prompt_duration', mac };
   }
 
   // Extract MAC from reply-to-message if present
@@ -523,6 +533,27 @@ export async function processMenuCommand(command, redis, botToken = null, chatId
     };
   }
 
+  if (command === 'auth' || command === 'auth_prompt') {
+    const promptMsg = [
+      '➕ *সরাসরি MAC অ্যাড্রেস অনুমোদন (Authorize MAC)*',
+      '━━━━━━━━━━━━━━━━━━━━',
+      'যেকোনো ডিভাইসকে (ফোন, ল্যাপটপ, অ্যান্ড্রয়েড টিভি ইত্যাদি) সরাসরি অনুমোদন দিতে তার **MAC Address** লিখে পাঠান।',
+      '',
+      '📌 *উদাহরণ ফরম্যাট:*',
+      '• `46:84:b7:da:39:73`',
+      '• `AA-BB-CC-DD-EE-FF`',
+      '• অথবা: `/auth 46:84:b7:da:39:73`',
+      '',
+      '_💡 MAC এড্রেসটি এখানে পাঠানোর পর কতক্ষণের জন্য এক্সেস দিতে চান তা বেছে নেওয়ার অপশন আসবে।_'
+    ].join('\n');
+
+    return {
+      text: promptMsg,
+      replyMarkup: TELEGRAM_INLINE_MENU,
+      ackText: '➕ MAC এড্রেস প্রদান করুন'
+    };
+  }
+
   return {
     text: 'ℹ️ কমান্ডটি খুঁজে পাওয়া যায়নি। অনুগ্রহ করে মেনু থেকে নির্বাচন করুন।',
     replyMarkup: TELEGRAM_INLINE_MENU
@@ -544,6 +575,14 @@ export function normalizeCommandText(text) {
 
   if (['start', 'menu', 'help', 'মেনু', 'সাহায্য'].includes(normalized)) {
     return 'menu';
+  }
+  // Check auth prompt command
+  if (
+    ['auth', 'approve', 'authorize', 'ম্যাক অথোরাইজ', 'অথোরাইজ ম্যাক', '➕ ম্যাক অথোরাইজ', '➕ অথোরাইজ ম্যাক', 'ম্যাক'].includes(normalized) ||
+    raw.includes('ম্যাক অথোরাইজ') ||
+    raw.includes('অথোরাইজ ম্যাক')
+  ) {
+    return 'auth';
   }
   // Check clean before other keywords
   if (['clean', 'ক্লিন', '🧹 ক্লিন চ্যাট ও ডাটা', '🧹 ক্লিন ড্যাশবোর্ড'].includes(normalized) || raw.includes('ক্লিন')) {
@@ -631,17 +670,50 @@ export default async function handler(req, res) {
     if (customAuth) {
       let { action, mac, duration } = customAuth;
 
-      // Auto-resolve target MAC from Redis pending queue if message was not a direct command or reply
+      // 1.1.1 Handle prompt_duration: user provided a MAC without specifying duration
+      if (action === 'prompt_duration' && mac) {
+        if (chatId) {
+          await redis.set(`last_prompted_mac:${chatId}`, mac, { ex: 600 }).catch(() => {});
+        }
+
+        const durationPrompt = [
+          '⏱ *অনুমোদনের সময়কাল নির্ধারণ করুন*',
+          '━━━━━━━━━━━━━━━━━━━━',
+          `🏷 *ডিভাইস MAC:* \`${mac}\``,
+          '',
+          'এই ডিভাইসটিকে আপনি কতক্ষণের জন্য পারমিশন দিতে চান?',
+          'নিচের অপশনগুলো থেকে বেছে নিন অথবা সময় লিখে পাঠান (যেমন: `15m`, `1h`, বা `unlimited`):'
+        ].join('\n');
+
+        await sendTelegramMessage(
+          botToken,
+          chatId,
+          durationPrompt,
+          { inline_keyboard: buildDefaultAuthKeyboard(mac) },
+          redis
+        );
+        return res.status(200).json({ ok: true, action: 'prompt_duration_sent', mac });
+      }
+
+      // Auto-resolve target MAC from cached prompted MAC or Redis pending queue if message was not a direct command or reply
       if (!mac) {
         try {
-          const pendingMacs = await redis.lrange('pending_macs', -1, -1);
-          if (pendingMacs && pendingMacs.length > 0 && MAC_REGEX.test(pendingMacs[0])) {
-            mac = pendingMacs[0].toLowerCase().replace(/-/g, ':');
-          } else {
-            const users = await fetchUserRecords(redis);
-            const pendingUser = users.find(u => String(u.status).toLowerCase() === 'pending');
-            if (pendingUser && pendingUser.mac) {
-              mac = pendingUser.mac.toLowerCase().replace(/-/g, ':');
+          if (chatId) {
+            const cachedPromptedMac = await redis.get(`last_prompted_mac:${chatId}`);
+            if (cachedPromptedMac && MAC_REGEX.test(cachedPromptedMac)) {
+              mac = cachedPromptedMac.toLowerCase().replace(/-/g, ':');
+            }
+          }
+          if (!mac) {
+            const pendingMacs = await redis.lrange('pending_macs', -1, -1);
+            if (pendingMacs && pendingMacs.length > 0 && MAC_REGEX.test(pendingMacs[0])) {
+              mac = pendingMacs[0].toLowerCase().replace(/-/g, ':');
+            } else {
+              const users = await fetchUserRecords(redis);
+              const pendingUser = users.find(u => String(u.status).toLowerCase() === 'pending');
+              if (pendingUser && pendingUser.mac) {
+                mac = pendingUser.mac.toLowerCase().replace(/-/g, ':');
+              }
             }
           }
         } catch (dbErr) {
@@ -719,6 +791,10 @@ export default async function handler(req, res) {
       }
 
       try {
+        if (chatId) {
+          await redis.del(`last_prompted_mac:${chatId}`).catch(() => {});
+        }
+
         // 1. Push command to pending_commands queue for OpenWrt router
         await redis.rpush('pending_commands', command);
 
@@ -771,6 +847,7 @@ export default async function handler(req, res) {
         'এই বটের মাধ্যমে আপনি সরাসরি ওয়াইফাই নেটওয়ার্কের লাইভ ইউজার মনিটর ও সংযোগ নিয়ন্ত্রণ করতে পারবেন।',
         '',
         '🔘 *প্রধান কন্ট্রোল অপশনসমূহ:*',
+        '• ➕ *ম্যাক অথোরাইজ:* সরাসরি MAC অ্যাড্রেস দিয়ে সময় নির্ধারণ করে অনুমোদন',
         '• 🟢 *অ্যাক্টিভ ইউজার:* সংযুক্ত সক্রিয় ডিভাইস ও সরাসরি টার্মিনেশন বাটন',
         '• 👥 *পূর্ববর্তী ইউজার:* পূর্ববর্তী বা মেয়াদোত্তীর্ণ ইউজারদের তালিকা',
         '• 📋 *ইউজার ডিটেইলস:* প্রতিটি ইউজারের পূর্ণ বিবরণ (নাম, তারিখ, MAC, IP ও টাইমস্ট্যাম্প)',
@@ -922,6 +999,10 @@ export default async function handler(req, res) {
   }
 
   try {
+    if (cbChatId) {
+      await redis.del(`last_prompted_mac:${cbChatId}`).catch(() => {});
+    }
+
     // 1. Push command to FIFO pending_commands queue for OpenWrt router
     await redis.rpush('pending_commands', command);
 

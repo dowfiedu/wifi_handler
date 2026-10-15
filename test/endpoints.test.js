@@ -10,7 +10,7 @@ import loginHandler from '../api/login.js';
 import pendingAuthHandler from '../api/pending-auth.js';
 import confirmAuthHandler from '../api/confirm-auth.js';
 import statusHandler from '../api/status.js';
-import routerHandler from '../api/router.js';
+import routerHandler, { isDangerousRouterCommand } from '../api/router.js';
 import deauthHandler from '../api/deauth.js';
 
 // Helper mock response factory
@@ -483,6 +483,95 @@ describe('API Endpoints Validation & Status Codes', () => {
       assert.ok(sendMsgCall, 'sendMessage was called');
       const sendBody = JSON.parse(sendMsgCall.options.body);
       assert.match(sendBody.text, /45 মিনিটের জন্য/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('/api/webhook prompts for MAC when /auth or ➕ ম্যাক অথোরাইজ menu command is triggered', async () => {
+    process.env.TELEGRAM_BOT_TOKEN = 'test-token';
+    process.env.UPSTASH_REDIS_REST_URL = 'https://mock.upstash.io';
+    process.env.UPSTASH_REDIS_REST_TOKEN = 'mock-token';
+
+    const fetchCalls = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, options) => {
+      fetchCalls.push({ url: String(url), options });
+      return new Response(JSON.stringify({ ok: true, result: 1 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    };
+
+    try {
+      const req = {
+        method: 'POST',
+        body: {
+          update_id: 9903,
+          message: {
+            message_id: 503,
+            text: '➕ ম্যাক অথোরাইজ',
+            chat: { id: 12345 }
+          }
+        }
+      };
+      const res = createMockRes();
+      await webhookHandler(req, res);
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.ok, true);
+      assert.equal(res.body.command, 'auth');
+
+      const sendMsgCall = fetchCalls.find(c => c.url.includes('sendMessage'));
+      assert.ok(sendMsgCall);
+      const sendBody = JSON.parse(sendMsgCall.options.body);
+      assert.match(sendBody.text, /সরাসরি MAC অ্যাড্রেস অনুমোদন/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('/api/webhook prompts for duration when user provides bare MAC address', async () => {
+    process.env.TELEGRAM_BOT_TOKEN = 'test-token';
+    process.env.UPSTASH_REDIS_REST_URL = 'https://mock.upstash.io';
+    process.env.UPSTASH_REDIS_REST_TOKEN = 'mock-token';
+
+    const fetchCalls = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, options) => {
+      fetchCalls.push({ url: String(url), options });
+      return new Response(JSON.stringify({ ok: true, result: 1 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    };
+
+    try {
+      const req = {
+        method: 'POST',
+        body: {
+          update_id: 9904,
+          message: {
+            message_id: 504,
+            text: '46:84:b7:da:39:73',
+            chat: { id: 12345 }
+          }
+        }
+      };
+      const res = createMockRes();
+      await webhookHandler(req, res);
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.ok, true);
+      assert.equal(res.body.action, 'prompt_duration_sent');
+      assert.equal(res.body.mac, '46:84:b7:da:39:73');
+
+      const sendMsgCall = fetchCalls.find(c => c.url.includes('sendMessage'));
+      assert.ok(sendMsgCall);
+      const sendBody = JSON.parse(sendMsgCall.options.body);
+      assert.match(sendBody.text, /অনুমোদনের সময়কাল নির্ধারণ করুন/);
+      assert.match(sendBody.text, /46:84:b7:da:39:73/);
+      assert.ok(sendBody.reply_markup && sendBody.reply_markup.inline_keyboard);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1252,7 +1341,7 @@ describe('API Endpoints Validation & Status Codes', () => {
       },
       {
         body: { command: 'set_hw_offload', value: '1' },
-        expectedCmd: "uci set firewall.@defaults[0].flow_offloading='1' && uci set firewall.@defaults[0].flow_offloading_hw='1' && uci commit firewall && /etc/init.d/firewall restart"
+        expectedCmd: "uci set firewall.@defaults[0].flow_offloading='1' && uci set firewall.@defaults[0].flow_offloading_hw='0' && uci commit firewall && /etc/init.d/firewall restart"
       },
       {
         body: { command: 'set_sqm', value: '1' },
@@ -1277,6 +1366,14 @@ describe('API Endpoints Validation & Status Codes', () => {
       {
         body: { command: 'set_doh', value: '1' },
         expectedCmd: '/etc/init.d/https-dns-proxy start'
+      },
+      {
+        body: { command: 'set_dns', value: '1.1.1.1', target: '1.0.0.1' },
+        expectedCmd: "uci set network.wan.peerdns='0' && uci delete network.wan.dns 2>/dev/null && uci add_list network.wan.dns='1.1.1.1' && uci add_list network.wan.dns='1.0.0.1' && uci commit network && /etc/init.d/network reload"
+      },
+      {
+        body: { command: 'set_dns', value: 'auto' },
+        expectedCmd: "uci set network.wan.peerdns='1' && uci delete network.wan.dns 2>/dev/null && uci commit network && /etc/init.d/network reload"
       },
       {
         body: { command: 'raw_cmd', value: 'ping -c 4 8.8.8.8' },
@@ -1350,6 +1447,72 @@ describe('API Endpoints Validation & Status Codes', () => {
       assert.ok(typeof res.body.output === 'string');
       assert.ok(res.body.output.length > 0);
     }
+  });
+
+  test('/api/router POST blocks dangerous bricking commands with 403', async () => {
+    process.env.ROUTER_SECRET_KEY = 'test_secret';
+
+    const brickingCommands = [
+      'mtd write /tmp/bad.bin firmware',
+      'sysupgrade -F /tmp/bad.bin',
+      'rm -rf /',
+      'rm -rf /overlay',
+      'dd if=/dev/zero of=/dev/mtdblock0',
+      'mkfs.ext4 /dev/mtdblock3',
+      'uci set network.lan.ipaddr=0.0.0.0',
+      'ifdown lan',
+      'ip link set br-lan down',
+      '/etc/init.d/network stop',
+      ':(){ :|:& };:'
+    ];
+
+    for (const cmd of brickingCommands) {
+      const req = {
+        method: 'POST',
+        headers: { 'x-router-secret': 'test_secret' },
+        body: { command: 'raw_cmd', value: cmd }
+      };
+      const res = createMockRes();
+      await routerHandler(req, res);
+
+      assert.equal(res.statusCode, 403);
+      assert.equal(res.body.blocked, true);
+      assert.ok(res.body.error.includes('SAFETY LOCK ACTIVATED'));
+    }
+  });
+
+  test('/api/router POST rejects invalid DNS IP formats with 400', async () => {
+    process.env.ROUTER_SECRET_KEY = 'test_secret';
+
+    const invalidDnsReqs = [
+      { command: 'set_dns', value: 'bad.ip.format' },
+      { command: 'set_dns', value: '1.1.1.1; rm -rf /' },
+      { command: 'set_dns', value: '1.1.1.1', target: '$(reboot)' }
+    ];
+
+    for (const body of invalidDnsReqs) {
+      const req = {
+        method: 'POST',
+        headers: { 'x-router-secret': 'test_secret' },
+        body
+      };
+      const res = createMockRes();
+      await routerHandler(req, res);
+
+      assert.equal(res.statusCode, 400);
+      assert.ok(res.body.error.includes('Invalid DNS IP'));
+    }
+  });
+
+  test('isDangerousRouterCommand correctly flags bricking and dangerous commands', () => {
+    assert.equal(isDangerousRouterCommand('mtd erase firmware'), true);
+    assert.equal(isDangerousRouterCommand('sysupgrade image.bin'), true);
+    assert.equal(isDangerousRouterCommand('sysupgrade -b /tmp/backup.tar.gz'), false); // safe backup
+    assert.equal(isDangerousRouterCommand('rm -rf /etc'), true);
+    assert.equal(isDangerousRouterCommand('ifdown lan'), true);
+    assert.equal(isDangerousRouterCommand('ping -c 4 8.8.8.8'), false);
+    assert.equal(isDangerousRouterCommand('traceroute 1.1.1.1'), false);
+    assert.equal(isDangerousRouterCommand('uptime'), false);
   });
 
   test('/api/router POST accepts report_status action and caches telemetry', async () => {
