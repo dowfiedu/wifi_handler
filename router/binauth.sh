@@ -57,6 +57,22 @@ case "$METHOD" in
         if command -v logger >/dev/null 2>&1; then
             logger -t "opennds-binauth" "[INFO] Client authenticated: $CLIENT_MAC"
         fi
+        CONF="/etc/opennds/sync.conf"
+        [ -f "$CONF" ] && . "$CONF"
+        _confirm_url="${CONFIRM_URL:-https://wifihandler.vercel.app/api/confirm-auth}"
+        if command -v uclient-fetch >/dev/null 2>&1; then
+            uclient-fetch -q --timeout=5 \
+                --header="x-router-secret: $ROUTER_SECRET_KEY" \
+                --header="Content-Type: application/x-www-form-urlencoded" \
+                --post-data="mac=$CLIENT_MAC&command=ndsctl+auth+$CLIENT_MAC&status=success" \
+                -O - "$_confirm_url" >/dev/null 2>&1 &
+        elif command -v curl >/dev/null 2>&1; then
+            curl -s -m 5 \
+                -H "x-router-secret: $ROUTER_SECRET_KEY" \
+                -H "Content-Type: application/x-www-form-urlencoded" \
+                -d "mac=$CLIENT_MAC&command=ndsctl+auth+$CLIENT_MAC&status=success" \
+                "$_confirm_url" >/dev/null 2>&1 &
+        fi
         exit 0
         ;;
 

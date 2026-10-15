@@ -47,6 +47,7 @@ import {
   formatVoucherRedeemedNotice
 } from '../lib/voucher.js';
 import { handleExtendedCommand } from '../lib/telegram/extended-commands.js';
+import { formatRouterActionNotice, sendRouterConfirmationNotice } from '../lib/telegram/router-confirm.js';
 
 describe('api/request.js Helpers', () => {
   test('escapeMarkdown escapes Markdown special characters', () => {
@@ -1192,6 +1193,110 @@ describe('lib/telegram/extended-commands.js Extended Commands Dispatcher', () =>
     assert.equal(res.handled, false);
   });
 });
+
+describe('lib/telegram/router-confirm.js Router Execution Notices', () => {
+  function createMockRedis() {
+    const store = new Map();
+    const hashes = new Map();
+    return {
+      async get(key) { return store.has(key) ? store.get(key) : null; },
+      async set(key, val) { store.set(key, val); return 'OK'; },
+      async del(key) { store.delete(key); return 1; },
+      async hset(key, obj) {
+        const cur = hashes.get(key) || {};
+        hashes.set(key, { ...cur, ...obj });
+        return 1;
+      },
+      async hgetall(key) { return hashes.get(key) || {}; }
+    };
+  }
+
+  test('formatRouterActionNotice formats auth, deauth, trust, and untrust cards', () => {
+    const authCard = formatRouterActionNotice({
+      command: 'ndsctl auth 00:11:22:33:44:55 45',
+      mac: '00:11:22:33:44:55',
+      user: { name: 'Sabbir' }
+    });
+    assert.ok(authCard.includes('ওয়াইফাই এক্সেস সক্রিয়'));
+    assert.ok(authCard.includes('Sabbir'));
+    assert.ok(authCard.includes('45 মিনিট'));
+
+    const deauthCard = formatRouterActionNotice({
+      command: 'ndsctl deauth 00:11:22:33:44:55',
+      mac: '00:11:22:33:44:55',
+      user: { name: 'Sabbir' }
+    });
+    assert.ok(deauthCard.includes('সংযোগ বিচ্ছিন্ন'));
+    assert.ok(deauthCard.includes('00:11:22:33:44:55'));
+
+    const trustCard = formatRouterActionNotice({
+      command: 'ndsctl trust 00:11:22:33:44:55',
+      mac: '00:11:22:33:44:55'
+    });
+    assert.ok(trustCard.includes('স্থায়ী বিশ্বস্ত অনুমোদন'));
+
+    const untrustCard = formatRouterActionNotice({
+      command: 'ndsctl untrust 00:11:22:33:44:55',
+      mac: '00:11:22:33:44:55'
+    });
+    assert.ok(untrustCard.includes('স্থায়ী বিশ্বস্ত তালিকা থেকে অপসারিত'));
+  });
+
+  test('formatRouterActionNotice formats speed limit and reboot notices', () => {
+    const limitCard = formatRouterActionNotice({
+      command: "uci set archer_guard.limit_112233445566.mbps='10'",
+      mac: '11:22:33:44:55:66'
+    });
+    assert.ok(limitCard.includes('ব্যান্ডউইথ স্পিড লিমিট কার্যকর'));
+    assert.ok(limitCard.includes('10 Mbps'));
+
+    const removeLimitCard = formatRouterActionNotice({
+      command: "uci delete archer_guard.limit_112233445566",
+      mac: '11:22:33:44:55:66'
+    });
+    assert.ok(removeLimitCard.includes('ব্যান্ডউইথ লিমিট অপসারিত'));
+
+    const rebootCard = formatRouterActionNotice({ command: 'reboot' });
+    assert.ok(rebootCard.includes('রাউটার রিবুট'));
+  });
+
+  test('sendRouterConfirmationNotice sends message and respects deduplication', async () => {
+    const fetchCalls = [];
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      fetchCalls.push({ url: String(url), body: opts?.body ? JSON.parse(opts.body) : null });
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 888 } }));
+    };
+
+    const redis = createMockRedis();
+
+    try {
+      const first = await sendRouterConfirmationNotice({
+        redis,
+        botToken: 'token',
+        chatId: 1234,
+        payload: { command: 'reboot', status: 'success' }
+      });
+      assert.equal(first.ok, true);
+      assert.equal(first.notified, true);
+      assert.equal(fetchCalls.length, 1);
+
+      // Duplicate within 8 seconds
+      const second = await sendRouterConfirmationNotice({
+        redis,
+        botToken: 'token',
+        chatId: 1234,
+        payload: { command: 'reboot', status: 'success' }
+      });
+      assert.equal(second.ok, true);
+      assert.equal(second.deduplicated, true);
+      assert.equal(fetchCalls.length, 1);
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+});
+
 
 
 

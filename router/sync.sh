@@ -144,11 +144,16 @@ kick_wifi_client() {
     fi
 }
 
+confirm_action() {
+    _cmd="$1"; _mac="$2"; _status="${3:-success}"; _details="$4"
+    _url="${CONFIRM_URL:-$(printf '%s' "$API_URL" | sed 's/\(poll\|pending-auth\)/confirm-auth/')}"
+    http_post "$_url" "mac=$_mac&command=$(printf '%s' "$_cmd" | tr ' ' '+')&status=$_status&details=$(printf '%s' "$_details" | tr ' ' '+')" "application/x-www-form-urlencoded"
+    log "INFO" "Confirmed action: '$_cmd' [status: $_status]"
+}
+
 confirm_auth() {
     _mac="$1"
-    _url="${CONFIRM_URL:-$(printf '%s' "$API_URL" | sed 's/\(poll\|pending-auth\)/confirm-auth/')}"
-    http_post "$_url" "mac=$_mac" "application/x-www-form-urlencoded"
-    log "INFO" "Confirmed auth for MAC: $_mac"
+    confirm_action "ndsctl auth $_mac" "$_mac" "success" "Authenticated"
 }
 
 trap 'log "INFO" "Stopping sync daemon."; exit 0' INT TERM
@@ -176,6 +181,7 @@ while true; do
                         ;;
                     reboot)
                         log "WARN" "Executing router reboot in 1 second..."
+                        confirm_action "$cmd" "" "success" "Rebooting"
                         ( sleep 1; reboot ) >/dev/null 2>&1 &
                         ;;
                     *)
@@ -191,6 +197,7 @@ while true; do
                             uci del_list opennds.@opennds[0].trustedmac="$_deauth_mac" >/dev/null 2>&1
                             uci commit opennds >/dev/null 2>&1
                         fi
+                        confirm_action "$cmd" "$_deauth_mac" "success" "Deauthenticated"
                         ;;
                     ndsctl\ trust\ *)
                         _trust_mac=$(printf '%s' "$cmd" | awk '{print $3}')
@@ -198,7 +205,7 @@ while true; do
                             uci add_list opennds.@opennds[0].trustedmac="$_trust_mac" >/dev/null 2>&1
                             uci commit opennds >/dev/null 2>&1
                         fi
-                        confirm_auth "$_trust_mac"
+                        confirm_action "$cmd" "$_trust_mac" "success" "Permanent Trusted"
                         ;;
                     ndsctl\ untrust\ *)
                         _untrust_mac=$(printf '%s' "$cmd" | awk '{print $3}')
@@ -206,9 +213,15 @@ while true; do
                             uci del_list opennds.@opennds[0].trustedmac="$_untrust_mac" >/dev/null 2>&1
                             uci commit opennds >/dev/null 2>&1
                         fi
+                        confirm_action "$cmd" "$_untrust_mac" "success" "Untrusted"
                         ;;
                     ndsctl\ auth\ *)
-                        confirm_auth "$(printf '%s' "$cmd" | awk '{print $3}')"
+                        confirm_action "$cmd" "$(printf '%s' "$cmd" | awk '{print $3}')" "success" "Authenticated"
+                        ;;
+                    reboot)
+                        ;;
+                    *)
+                        confirm_action "$cmd" "" "success" "$out"
                         ;;
                 esac
             else

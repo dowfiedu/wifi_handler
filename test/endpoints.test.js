@@ -1094,6 +1094,75 @@ describe('API Endpoints Validation & Status Codes', () => {
     assert.equal(res.body.mac, '00:11:22:33:44:55');
   });
 
+  test('/api/confirm-auth confirms deauth command and dispatches Telegram notification', async () => {
+    const fetchCalls = [];
+    const origFetch = globalThis.fetch;
+    process.env.TELEGRAM_BOT_TOKEN = 'mock-bot-token';
+    process.env.TELEGRAM_CHAT_ID = '123456';
+
+    globalThis.fetch = async (url, opts) => {
+      fetchCalls.push({ url: String(url), body: opts?.body ? JSON.parse(opts.body) : null });
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 999 } }));
+    };
+
+    try {
+      const req = {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: 'mac=00:11:22:33:44:55&command=ndsctl+deauth+00:11:22:33:44:55&status=success'
+      };
+      const res = createMockRes();
+      await confirmAuthHandler(req, res);
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.success, true);
+      assert.equal(res.body.mac, '00:11:22:33:44:55');
+
+      const sendCall = fetchCalls.find(c => c.url.includes('sendMessage'));
+      assert.ok(sendCall);
+      assert.ok(sendCall.body.text.includes('সংযোগ বিচ্ছিন্ন'));
+      assert.ok(sendCall.body.text.includes('00:11:22:33:44:55'));
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+
+  test('/api/confirm-auth confirms speed limit command and dispatches Telegram notification', async () => {
+    const fetchCalls = [];
+    const origFetch = globalThis.fetch;
+    process.env.TELEGRAM_BOT_TOKEN = 'mock-bot-token';
+    process.env.TELEGRAM_CHAT_ID = '123456';
+
+    globalThis.fetch = async (url, opts) => {
+      fetchCalls.push({ url: String(url), body: opts?.body ? JSON.parse(opts.body) : null });
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 1000 } }));
+    };
+
+    try {
+      const req = {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: {
+          command: "uci set archer_guard.limit_aabbccddeeff.mbps='5'",
+          mac: 'aa:bb:cc:dd:ee:ff',
+          status: 'success'
+        }
+      };
+      const res = createMockRes();
+      await confirmAuthHandler(req, res);
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.success, true);
+
+      const sendCall = fetchCalls.find(c => c.url.includes('sendMessage'));
+      assert.ok(sendCall);
+      assert.ok(sendCall.body.text.includes('ব্যান্ডউইথ স্পিড লিমিট'));
+      assert.ok(sendCall.body.text.includes('5 Mbps'));
+    } finally {
+      globalThis.fetch = origFetch;
+    }
+  });
+
   test('/api/status rejects non-GET requests with 405', async () => {
     const req = { method: 'POST' };
     const res = createMockRes();
