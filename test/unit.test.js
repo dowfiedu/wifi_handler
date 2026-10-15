@@ -22,6 +22,8 @@ import {
   buildUnlimitedKeyboard,
   formatSingleActiveUserCard,
   formatDisconnectCard,
+  buildSpeedLimitKeyboard,
+  buildSpeedUsersKeyboard,
   TELEGRAM_MENU_KEYBOARD,
   TELEGRAM_INLINE_MENU,
   trackChatMessage,
@@ -145,6 +147,9 @@ describe('api/webhook.js Callback Parsing', () => {
     assert.deepEqual(parseCallbackData('menu_clean'), { action: 'menu', command: 'clean' });
     assert.deepEqual(parseCallbackData('menu_auth'), { action: 'menu', command: 'auth' });
     assert.deepEqual(parseCallbackData('menu_voucher'), { action: 'menu', command: 'voucher' });
+    assert.deepEqual(parseCallbackData('menu_speed'), { action: 'menu', command: 'speed' });
+    assert.deepEqual(parseCallbackData('speed_menu:aa:bb:cc:dd:ee:ff'), { action: 'speed_menu', mac: 'aa:bb:cc:dd:ee:ff' });
+    assert.deepEqual(parseCallbackData('set_speed:aa:bb:cc:dd:ee:ff:5'), { action: 'set_speed', mac: 'aa:bb:cc:dd:ee:ff', mbps: 5 });
     assert.deepEqual(parseCallbackData('gen_voucher:60'), { action: 'gen_voucher', duration: 60 });
     assert.deepEqual(parseCallbackData('gen_voucher:0'), { action: 'gen_voucher', duration: 0 });
   });
@@ -588,14 +593,17 @@ describe('lib/bot-menu.js Helpers & Formatters', () => {
   test('TELEGRAM_MENU_KEYBOARD includes direct MAC auth option, guest voucher and persistent settings', () => {
     assert.equal(TELEGRAM_MENU_KEYBOARD.is_persistent, true);
     assert.equal(TELEGRAM_MENU_KEYBOARD.resize_keyboard, true);
-    assert.equal(TELEGRAM_MENU_KEYBOARD.keyboard.length, 3);
+    assert.equal(TELEGRAM_MENU_KEYBOARD.keyboard.length, 4);
     assert.equal(TELEGRAM_MENU_KEYBOARD.keyboard[0].length, 2);
     assert.equal(TELEGRAM_MENU_KEYBOARD.keyboard[1].length, 2);
     assert.equal(TELEGRAM_MENU_KEYBOARD.keyboard[2].length, 2);
+    assert.equal(TELEGRAM_MENU_KEYBOARD.keyboard[3].length, 2);
     // Verifies MAC authorize and guest voucher buttons are present
     const allButtons = TELEGRAM_MENU_KEYBOARD.keyboard.flat().map(b => b.text);
     assert.ok(allButtons.includes('➕ ম্যাক অথোরাইজ'));
     assert.ok(allButtons.includes('🎟️ গেস্ট ভাউচার'));
+    assert.ok(allButtons.includes('⚡ স্পিড লিমিট'));
+    assert.ok(allButtons.includes('📊 নেটওয়ার্ক রিপোর্ট'));
     assert.ok(!allButtons.some(b => b.includes('ড্যাশবোর্ড')));
     assert.ok(allButtons.includes('🟢 অ্যাক্টিভ ইউজার'));
     assert.ok(allButtons.includes('🧹 ক্লিন চ্যাট ও ডাটা'));
@@ -650,6 +658,9 @@ describe('lib/bot-menu.js Helpers & Formatters', () => {
     assert.equal(normalizeCommandText('/voucher'), 'voucher');
     assert.equal(normalizeCommandText('🎟️ গেস্ট ভাউচার'), 'voucher');
     assert.equal(normalizeCommandText('ভাউচার'), 'voucher');
+    assert.equal(normalizeCommandText('/limit'), 'speed');
+    assert.equal(normalizeCommandText('⚡ স্পিড লিমিট'), 'speed');
+    assert.equal(normalizeCommandText('স্পিড লিমিট'), 'speed');
     assert.equal(normalizeCommandText('/report'), 'report');
     assert.equal(normalizeCommandText('রিপোর্ট'), 'report');
     assert.equal(normalizeCommandText('something-else'), null);
@@ -801,12 +812,40 @@ describe('lib/bot-menu.js Helpers & Formatters', () => {
     assert.equal(formatSingleActiveUserCard(null), '');
   });
 
-  test('buildSingleUserDeauthKeyboard generates a single disconnect button for target user', () => {
+  test('buildSingleUserDeauthKeyboard generates disconnect and speed limit buttons for target user', () => {
     const kb = buildSingleUserDeauthKeyboard('46:84:b7:da:39:73');
     assert.ok(kb && kb.inline_keyboard);
     assert.equal(kb.inline_keyboard.length, 1);
+    assert.equal(kb.inline_keyboard[0].length, 2);
     assert.equal(kb.inline_keyboard[0][0].text, '❌ সংযোগ বিচ্ছিন্ন করুন');
     assert.equal(kb.inline_keyboard[0][0].callback_data, 'deauth_46:84:b7:da:39:73');
+    assert.equal(kb.inline_keyboard[0][1].text, '⚡ স্পিড লিমিট');
+    assert.equal(kb.inline_keyboard[0][1].callback_data, 'speed_menu:46:84:b7:da:39:73');
+  });
+
+  test('buildSpeedLimitKeyboard generates preset speed options and full speed option', () => {
+    const kb = buildSpeedLimitKeyboard('46:84:b7:da:39:73');
+    assert.ok(Array.isArray(kb));
+    assert.equal(kb.length, 4);
+    assert.equal(kb[0][0].callback_data, 'set_speed:46:84:b7:da:39:73:1');
+    assert.equal(kb[0][1].callback_data, 'set_speed:46:84:b7:da:39:73:2');
+    assert.equal(kb[1][0].callback_data, 'set_speed:46:84:b7:da:39:73:5');
+    assert.equal(kb[1][1].callback_data, 'set_speed:46:84:b7:da:39:73:10');
+    assert.equal(kb[2][0].callback_data, 'set_speed:46:84:b7:da:39:73:0');
+    assert.equal(kb[3][0].callback_data, 'menu_back');
+  });
+
+  test('buildSpeedUsersKeyboard generates selectable user buttons for speed limits', () => {
+    const activeUsers = [
+      { name: 'Sabbir Phone', mac: '46:84:b7:da:39:73' },
+      { name: 'Laptop', mac: '06:31:5b:7a:aa:e7' }
+    ];
+    const kb = buildSpeedUsersKeyboard(activeUsers);
+    assert.ok(kb && kb.inline_keyboard);
+    assert.equal(kb.inline_keyboard.length, 3);
+    assert.equal(kb.inline_keyboard[0][0].callback_data, 'speed_menu:46:84:b7:da:39:73');
+    assert.equal(kb.inline_keyboard[1][0].callback_data, 'speed_menu:06:31:5b:7a:aa:e7');
+    assert.equal(kb.inline_keyboard[2][0].callback_data, 'menu_back');
   });
 
   test('deleteTelegramMessage safely deletes message and handles errors', async () => {
