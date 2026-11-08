@@ -11,8 +11,11 @@
 
 API_URL="${API_URL:-https://your-deployment.vercel.app/api/poll}"
 ROUTER_SECRET_KEY="${ROUTER_SECRET_KEY:-change_this_secret_key}"
-POLL_INTERVAL="${POLL_INTERVAL:-5}"
-LOG_TAG="${LOG_TAG:-opennds-sync}"
+# Precision Quota-Optimized Polling Profile (Target: 25% - 30% monthly Upstash quota = ~5,000 commands/day)
+POLL_INTERVAL_ACTIVE="${POLL_INTERVAL_ACTIVE:-5}"; POLL_INTERVAL_BURST="${POLL_INTERVAL_BURST:-5}"
+POLL_INTERVAL_DAY="${POLL_INTERVAL_DAY:-20}"; POLL_INTERVAL_NIGHT="${POLL_INTERVAL_NIGHT:-60}"
+ERROR_BACKOFF_INTERVAL="${ERROR_BACKOFF_INTERVAL:-15}"; MAC_REPORT_INTERVAL="${MAC_REPORT_INTERVAL:-120}"
+BURST_WINDOW_SECONDS=60; LOG_TAG="${LOG_TAG:-opennds-sync}"
 
 log() {
     _level="$1"; _msg="$2"
@@ -38,21 +41,36 @@ get_connected_macs() {
     fi
 }
 
+get_nds_client_count() {
+    if command -v ndsctl >/dev/null 2>&1; then
+        _json=$(ndsctl json 2>/dev/null)
+        if [ -n "$_json" ]; then
+            if command -v jsonfilter >/dev/null 2>&1; then
+                _preauth=$(printf '%s' "$_json" | jsonfilter -e '@.clients[*].state' 2>/dev/null | grep -ci 'preauth' 2>/dev/null)
+                [ -n "$_preauth" ] && echo "$_preauth" && return
+            fi
+            _len=$(printf '%s' "$_json" | jsonfilter -e '@.client_list_length' 2>/dev/null)
+            [ -n "$_len" ] && echo "$_len" && return
+        fi
+    fi
+    echo 0
+}
+
 http_get() {
     _url="$1"; _macs="$2"
     if command -v uclient-fetch >/dev/null 2>&1; then
-        uclient-fetch -q --timeout=10 --header="x-router-secret: $ROUTER_SECRET_KEY" --header="x-router-connected-macs: $_macs" --header="Accept: application/json, text/plain" -O - "$_url" 2>/dev/null
+        uclient-fetch -q --timeout=10 --header="x-router-secret: $ROUTER_SECRET_KEY" ${_macs:+--header="x-router-connected-macs: $_macs"} -O - "$_url" 2>/dev/null
     elif command -v curl >/dev/null 2>&1; then
-        curl -s -f -m 10 -H "x-router-secret: $ROUTER_SECRET_KEY" -H "x-router-connected-macs: $_macs" -H "Accept: application/json, text/plain" "$_url" 2>/dev/null
+        curl -s -f -m 10 -H "x-router-secret: $ROUTER_SECRET_KEY" ${_macs:+-H "x-router-connected-macs: $_macs"} -H "Accept: application/json, text/plain" "$_url" 2>/dev/null
     fi
 }
 
 http_post() {
-    _url="$1"; _data="$2"; _content_type="${3:-application/x-www-form-urlencoded}"
+    _url="$1"; _data="$2"; _ct="${3:-application/x-www-form-urlencoded}"
     if command -v uclient-fetch >/dev/null 2>&1; then
-        uclient-fetch -q --timeout=5 --header="x-router-secret: $ROUTER_SECRET_KEY" --header="Content-Type: $_content_type" --post-data="$_data" -O - "$_url" >/dev/null 2>&1
+        uclient-fetch -q --timeout=5 --header="x-router-secret: $ROUTER_SECRET_KEY" --header="Content-Type: $_ct" --post-data="$_data" -O - "$_url" >/dev/null 2>&1
     elif command -v curl >/dev/null 2>&1; then
-        curl -s -m 5 -X POST -H "x-router-secret: $ROUTER_SECRET_KEY" -H "Content-Type: $_content_type" -d "$_data" "$_url" >/dev/null 2>&1
+        curl -s -m 5 -X POST -H "x-router-secret: $ROUTER_SECRET_KEY" -H "Content-Type: $_ct" -d "$_data" "$_url" >/dev/null 2>&1
     fi
 }
 
@@ -81,51 +99,101 @@ parse_mac() {
     parse_json_field "$_raw" "mac"
 }
 
-is_command_safe() {
-    # ANTI-BRICK: strictly block dangerous flashing, disk wipe, or LAN lockout commands
+is_valid_mac() {
     case "$1" in
-        *mtd*|*flash_*|*fw_setenv*|*dd\ *|*mkfs*|*fdisk*|*parted*|*rm\ -rf*|*network.lan*|*ifdown\ lan*|*br-lan\ down*|*dhcp.lan.ignore*|*passwd*|*shadow*|*inittab*|*\:\(\)\{*) return 1 ;;
-        *sysupgrade*)
-            case "$1" in
-                sysupgrade\ -b\ *) ;;
-                *) return 1 ;;
-            esac ;;
-    esac
-    case "$1" in
-        ndsctl\ auth\ [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]\ [0-9]*) return 0 ;;
-        ndsctl\ deauth\ [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]) return 0 ;;
-        ndsctl\ trust\ [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]) return 0 ;;
-        ndsctl\ untrust\ [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]) return 0 ;;
-        "reboot") return 0 ;;
-        "echo 3 > /proc/sys/vm/drop_caches") return 0 ;;
-        uci\ set\ wireless.*.disabled=\'[01]\'\ \&\&\ uci\ commit\ wireless\ \&\&\ wifi\ reload) return 0 ;;
-        uci\ set\ wireless.*.txpower=\'[0-9]*\'\ \&\&\ uci\ commit\ wireless\ \&\&\ wifi\ reload) return 0 ;;
-        uci\ set\ wireless.*.channel=\'[0-9]*\'\ \&\&\ uci\ commit\ wireless\ \&\&\ wifi\ reload) return 0 ;;
-        uci\ set\ wireless.*.htmode=\'*\'\ \&\&\ uci\ commit\ wireless\ \&\&\ wifi\ reload) return 0 ;;
-        uci\ set\ wireless.*.ssid=\'*\'\ \&\&\ uci\ commit\ wireless\ \&\&\ wifi\ reload) return 0 ;;
-        uci\ set\ wireless.*) return 0 ;;
-        uci\ delete\ wireless.*) return 0 ;;
-        iptables\ -I\ FORWARD\ 1\ -m\ mac\ --mac-source\ [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]\ -j\ DROP) return 0 ;;
-        iptables\ -D\ FORWARD\ -m\ mac\ --mac-source\ [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]\ -j\ DROP) return 0 ;;
-        etherwake\ -i\ br-lan\ [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]) return 0 ;;
-        uci\ set\ dhcp.*) return 0 ;;
-        uci\ delete\ dhcp.*) return 0 ;;
-        "for _l in /sys/class/leds/"*) return 0 ;;
-        uci\ set\ firewall.@defaults\[0\].flow_offloading*) return 0 ;;
-        /etc/init.d/firewall\ restart) return 0 ;;
-        uci\ set\ sqm.@queue\[0\].*) return 0 ;;
-        /etc/init.d/sqm\ restart) return 0 ;;
-        ifup\ wg0|ifdown\ wg0) return 0 ;;
-        uci\ set\ mwan3.*) return 0 ;;
-        /etc/init.d/mwan3\ *) return 0 ;;
-        /etc/init.d/https-dns-proxy\ *) return 0 ;;
-        *network.wan*peerdns*|*network.wan*dns*|*/etc/init.d/network\ reload*) return 0 ;;
-        sysupgrade\ -b\ *|tar\ -czf\ /tmp/backup-OpenWrt-c6.tar.gz*) return 0 ;;
-        uci\ set\ archer_guard.*) return 0 ;;
-        uci\ commit\ archer_guard*) return 0 ;;
-        wrtbwmon\ *) return 0 ;;
-        *crontabs/root*|/etc/init.d/cron\ restart) return 0 ;;
+        [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]) return 0 ;;
         *) return 1 ;;
+    esac
+}
+
+is_single_command_safe() {
+    _cmd="$1"
+    # Reject dangerous metacharacters: semicolons, pipes, backticks, subshells, variable interpolation, newlines
+    case "$_cmd" in
+        *[\;\|\`\$\(\)]*|*"\n"*|*"
+"*) return 1 ;;
+    esac
+
+    # Explicit whitelist of single commands and verified parameter patterns
+    case "$_cmd" in
+        "reboot"|"wifi reload"|"wrtbwmon reset"|"ifup wg0"|"ifdown wg0") return 0 ;;
+        "echo 3 > /proc/sys/vm/drop_caches") return 0 ;;
+        "echo '0 4 * * * /sbin/reboot' >> /etc/crontabs/root"|"echo \"0 4 * * * /sbin/reboot\" >> /etc/crontabs/root") return 0 ;;
+        /etc/init.d/firewall\ restart|/etc/init.d/firewall\ reload) return 0 ;;
+        /etc/init.d/sqm\ restart|/etc/init.d/sqm\ start|/etc/init.d/sqm\ stop) return 0 ;;
+        /etc/init.d/mwan3\ restart) return 0 ;;
+        /etc/init.d/https-dns-proxy\ start|/etc/init.d/https-dns-proxy\ restart) return 0 ;;
+        /etc/init.d/cron\ restart) return 0 ;;
+        uci\ commit\ *|uci\ commit) return 0 ;;
+        uci\ set\ wireless.*|uci\ delete\ wireless.*) return 0 ;;
+        uci\ set\ dhcp.*|uci\ delete\ dhcp.*) return 0 ;;
+        uci\ set\ firewall.*|uci\ delete\ firewall.*) return 0 ;;
+        uci\ set\ sqm.*|uci\ delete\ sqm.*) return 0 ;;
+        uci\ set\ mwan3.*|uci\ delete\ mwan3.*) return 0 ;;
+        uci\ set\ archer_guard.*|uci\ commit\ archer_guard) return 0 ;;
+        etherwake\ -i\ br-lan\ *)
+            _mac=$(printf "%s" "$_cmd" | awk '{print $4}')
+            is_valid_mac "$_mac" && return 0
+            return 1 ;;
+        iptables\ -I\ FORWARD\ 1\ -m\ mac\ --mac-source\ *\ -j\ DROP|iptables\ -D\ FORWARD\ -m\ mac\ --mac-source\ *\ -j\ DROP)
+            _mac=$(printf "%s" "$_cmd" | sed -n 's/.*--mac-source \([0-9a-fA-F:]*\).*/\1/p')
+            is_valid_mac "$_mac" && return 0
+            return 1 ;;
+        ndsctl\ auth\ *)
+            _mac=$(printf "%s" "$_cmd" | awk '{print $3}')
+            _dur=$(printf "%s" "$_cmd" | awk '{print $4}')
+            is_valid_mac "$_mac" || return 1
+            case "$_dur" in
+                ""|*[!0-9]*) return 1 ;;
+                *) return 0 ;;
+            esac ;;
+        ndsctl\ deauth\ *|ndsctl\ trust\ *|ndsctl\ untrust\ *)
+            _mac=$(printf "%s" "$_cmd" | awk '{print $3}')
+            is_valid_mac "$_mac" && return 0
+            return 1 ;;
+        *) return 1 ;;
+    esac
+}
+
+is_command_safe() {
+    _raw="$1"
+    [ -z "$_raw" ] && return 1
+
+    # Strictly reject dangerous metacharacters: semicolons, pipes, backticks, subshells, variable expansion
+    case "$_raw" in
+        *[\;\|\`\$\(\)]*|*"\n"*|*"
+"*) return 1 ;;
+    esac
+
+    # Anti-brick blocklist: reject firmware wiping, raw flash, password/shadow files
+    case "$_raw" in
+        *mtd*|*flash_*|*fw_setenv*|*dd\ *|*mkfs*|*fdisk*|*parted*|*rm\ -rf*|*network.lan*|*ifdown\ lan*|*br-lan\ down*|*dhcp.lan.ignore*|*passwd*|*shadow*|*inittab*|*\:\(\)\{*) return 1 ;;
+    esac
+
+    # Handle chained commands (&&) safely by validating every sub-command against the whitelist
+    case "$_raw" in
+        *"\&\&"*)
+            _remaining="$_raw"
+            while [ -n "$_remaining" ]; do
+                case "$_remaining" in
+                    *"\&\&"*)
+                        _subcmd="${_remaining%%&&*}"
+                        _remaining="${_remaining#*&&}"
+                        ;;
+                    *)
+                        _subcmd="$_remaining"
+                        _remaining=""
+                        ;;
+                esac
+                _subcmd=$(printf "%s" "$_subcmd" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+                is_single_command_safe "$_subcmd" || return 1
+            done
+            return 0
+            ;;
+        *)
+            _trimmed=$(printf "%s" "$_raw" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+            is_single_command_safe "$_trimmed"
+            ;;
     esac
 }
 
@@ -158,25 +226,68 @@ confirm_auth() {
 
 trap 'log "INFO" "Stopping sync daemon."; exit 0' INT TERM
 
-log "INFO" "Starting openNDS sync service on $API_URL (Interval: ${POLL_INTERVAL}s)"
+log "INFO" "Starting openNDS sync service on $API_URL (Active: ${POLL_INTERVAL_ACTIVE}s, Burst: ${POLL_INTERVAL_BURST}s, Day: ${POLL_INTERVAL_DAY}s, Night: ${POLL_INTERVAL_NIGHT}s)"
+
+_last_mac_report=0
+_last_command_time=0
 
 while true; do
-    _connected_macs=$(get_connected_macs)
+    _now=$(date +%s)
+    _client_count=$(get_nds_client_count)
+    _hour=$(date +%H | sed 's/^0//')
+    [ -z "$_hour" ] && _hour=0
+
+    if [ "$_client_count" -gt 0 ]; then
+        _poll_sleep="$POLL_INTERVAL_ACTIVE"
+    elif [ $((_now - _last_command_time)) -lt "$BURST_WINDOW_SECONDS" ]; then
+        _poll_sleep="$POLL_INTERVAL_BURST"
+    elif [ "$_hour" -ge 1 ] && [ "$_hour" -lt 8 ]; then
+        _poll_sleep="$POLL_INTERVAL_NIGHT"
+    else
+        _poll_sleep="$POLL_INTERVAL_DAY"
+    fi
+
+    # Report connected MACs periodically (every 120s) to conserve Redis quota
+    if [ $((_now - _last_mac_report)) -ge "$MAC_REPORT_INTERVAL" ]; then
+        _connected_macs=$(get_connected_macs)
+        _last_mac_report="$_now"
+    else
+        _connected_macs=""
+    fi
+
     resp=$(http_get "$API_URL" "$_connected_macs")
     _err=$?
 
     if [ $_err -ne 0 ]; then
-        log "WARN" "Poll failed (code $_err)."
+        log "WARN" "Poll failed (code $_err). Backing off for ${ERROR_BACKOFF_INTERVAL}s."
+        sleep "$ERROR_BACKOFF_INTERVAL"
+        continue
     elif [ -n "$resp" ]; then
         cmd=$(parse_command "$resp")
         if [ -n "$cmd" ] && [ "$cmd" != "null" ]; then
+            _last_command_time="$_now"
             if is_command_safe "$cmd"; then
                 case "$cmd" in
-                    ndsctl\ *)
+                    ndsctl\ auth\ *)
+                        _mac=$(printf "%s" "$cmd" | awk '{print $3}')
+                        _dur=$(printf "%s" "$cmd" | awk '{print $4}')
                         if command -v ndsctl >/dev/null 2>&1; then
-                            out=$($cmd 2>&1); log "INFO" "Executed: '$cmd' [$out]"
+                            out=$(ndsctl auth "$_mac" "$_dur" 2>&1)
+                            log "INFO" "Executed: '$cmd' [$out]"
                         else
                             log "INFO" "[DRY-RUN] Simulating: $cmd"
+                            out="simulated auth"
+                        fi
+                        ;;
+                    ndsctl\ deauth\ *|ndsctl\ trust\ *|ndsctl\ untrust\ *)
+                        _verb=$(printf "%s" "$cmd" | awk '{print $2}')
+                        _mac=$(printf "%s" "$cmd" | awk '{print $3}')
+                        if command -v ndsctl >/dev/null 2>&1; then
+                            out=$(ndsctl "$_verb" "$_mac" 2>&1)
+                            log "INFO" "Executed: '$cmd' [$out]"
+                        else
+                            log "INFO" "[DRY-RUN] Simulating: $cmd"
+                            out="simulated $_verb"
                         fi
                         ;;
                     reboot)
@@ -185,7 +296,7 @@ while true; do
                         ( sleep 1; reboot ) >/dev/null 2>&1 &
                         ;;
                     *)
-                        out=$(eval "$cmd" 2>&1); log "INFO" "Executed: '$cmd' [$out]"
+                        out=$(sh -c "$cmd" 2>&1); log "INFO" "Executed: '$cmd' [$out]"
                         ;;
                 esac
 
@@ -193,40 +304,24 @@ while true; do
                     ndsctl\ deauth\ *)
                         _deauth_mac=$(printf '%s' "$cmd" | awk '{print $3}')
                         kick_wifi_client "$_deauth_mac"
-                        if command -v uci >/dev/null 2>&1; then
-                            uci del_list opennds.@opennds[0].trustedmac="$_deauth_mac" >/dev/null 2>&1
-                            uci commit opennds >/dev/null 2>&1
-                        fi
-                        confirm_action "$cmd" "$_deauth_mac" "success" "Deauthenticated"
-                        ;;
+                        command -v uci >/dev/null 2>&1 && { uci del_list opennds.@opennds[0].trustedmac="$_deauth_mac" 2>/dev/null; uci commit opennds 2>/dev/null; }
+                        confirm_action "$cmd" "$_deauth_mac" "success" "Deauthenticated" ;;
                     ndsctl\ trust\ *)
                         _trust_mac=$(printf '%s' "$cmd" | awk '{print $3}')
-                        if command -v uci >/dev/null 2>&1; then
-                            uci add_list opennds.@opennds[0].trustedmac="$_trust_mac" >/dev/null 2>&1
-                            uci commit opennds >/dev/null 2>&1
-                        fi
-                        confirm_action "$cmd" "$_trust_mac" "success" "Permanent Trusted"
-                        ;;
+                        command -v uci >/dev/null 2>&1 && { uci add_list opennds.@opennds[0].trustedmac="$_trust_mac" 2>/dev/null; uci commit opennds 2>/dev/null; }
+                        confirm_action "$cmd" "$_trust_mac" "success" "Permanent Trusted" ;;
                     ndsctl\ untrust\ *)
                         _untrust_mac=$(printf '%s' "$cmd" | awk '{print $3}')
-                        if command -v uci >/dev/null 2>&1; then
-                            uci del_list opennds.@opennds[0].trustedmac="$_untrust_mac" >/dev/null 2>&1
-                            uci commit opennds >/dev/null 2>&1
-                        fi
-                        confirm_action "$cmd" "$_untrust_mac" "success" "Untrusted"
-                        ;;
+                        command -v uci >/dev/null 2>&1 && { uci del_list opennds.@opennds[0].trustedmac="$_untrust_mac" 2>/dev/null; uci commit opennds 2>/dev/null; }
+                        confirm_action "$cmd" "$_untrust_mac" "success" "Untrusted" ;;
                     ndsctl\ auth\ *)
                         _auth_mac=$(printf '%s' "$cmd" | awk '{print $3}')
                         case "$out" in
                             *"not found"*|*"failed"*|*"error"*) confirm_action "$cmd" "$_auth_mac" "failed" "$out" ;;
                             *) confirm_action "$cmd" "$_auth_mac" "success" "Authenticated" ;;
-                        esac
-                        ;;
-                    reboot)
-                        ;;
-                    *)
-                        confirm_action "$cmd" "" "success" "$out"
-                        ;;
+                        esac ;;
+                    reboot) ;;
+                    *) confirm_action "$cmd" "" "success" "$out" ;;
                 esac
             else
                 log "ERROR" "SECURITY ALERT: Rejected command: '$cmd'"
@@ -241,5 +336,5 @@ while true; do
         fi
     fi
 
-    sleep "$POLL_INTERVAL"
+    sleep "$_poll_sleep"
 done
