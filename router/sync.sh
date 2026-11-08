@@ -11,10 +11,10 @@
 
 API_URL="${API_URL:-https://wifi-handler.wifizonesr.workers.dev/api/poll}"
 ROUTER_SECRET_KEY="${ROUTER_SECRET_KEY:-change_this_secret_key}"
-# Precision Quota-Optimized Polling Profile (Target: 25% - 30% monthly Upstash quota = ~5,000 commands/day)
+# Precision Quota-Optimized Polling Profile (Consumes < 35% of Upstash Redis 10k/day limit)
 POLL_INTERVAL_ACTIVE="${POLL_INTERVAL_ACTIVE:-5}"; POLL_INTERVAL_BURST="${POLL_INTERVAL_BURST:-5}"
-POLL_INTERVAL_DAY="${POLL_INTERVAL_DAY:-20}"; POLL_INTERVAL_NIGHT="${POLL_INTERVAL_NIGHT:-60}"
-ERROR_BACKOFF_INTERVAL="${ERROR_BACKOFF_INTERVAL:-15}"; MAC_REPORT_INTERVAL="${MAC_REPORT_INTERVAL:-120}"
+POLL_INTERVAL_DAY="${POLL_INTERVAL_DAY:-${POLL_INTERVAL:-25}}"; POLL_INTERVAL_NIGHT="${POLL_INTERVAL_NIGHT:-60}"
+ERROR_BACKOFF_INTERVAL="${ERROR_BACKOFF_INTERVAL:-20}"; MAC_REPORT_INTERVAL="${MAC_REPORT_INTERVAL:-180}"
 BURST_WINDOW_SECONDS=60; LOG_TAG="${LOG_TAG:-opennds-sync}"
 
 log() {
@@ -42,16 +42,20 @@ get_connected_macs() {
 }
 
 get_nds_client_count() {
+    # Strictly count clients in 'Preauthenticated' state awaiting approval.
+    # Never count total connected or authenticated clients to prevent 24/7 fast-polling.
     if command -v ndsctl >/dev/null 2>&1; then
-        _json=$(ndsctl json 2>/dev/null)
-        if [ -n "$_json" ]; then
-            if command -v jsonfilter >/dev/null 2>&1; then
-                _preauth=$(printf '%s' "$_json" | jsonfilter -e '@.clients[*].state' 2>/dev/null | grep -ci 'preauth' 2>/dev/null)
-                [ -n "$_preauth" ] && echo "$_preauth" && return
-            fi
-            _len=$(printf '%s' "$_json" | jsonfilter -e '@.client_list_length' 2>/dev/null)
-            [ -n "$_len" ] && echo "$_len" && return
-        fi
+        _cnt=$(ndsctl json 2>/dev/null | grep -ci "\"state\":[[:space:]]*\"preauthenticated\"")
+        case "$_cnt" in
+            ""|*[!0-9]*) ;;
+            *) echo "$_cnt"; return ;;
+        esac
+
+        _cnt=$(ndsctl status 2>/dev/null | grep -ci "State: Preauthenticated")
+        case "$_cnt" in
+            ""|*[!0-9]*) ;;
+            *) echo "$_cnt"; return ;;
+        esac
     fi
     echo 0
 }
