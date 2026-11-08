@@ -25,9 +25,23 @@ scp -O -q "$SCRIPT_DIR"/lib/*.sh "$SCRIPT_DIR"/lib/*.awk "$ROUTER_USER@$ROUTER_I
 printf "⚡ Copying main gateway to /www/cgi-bin/api...\n"
 scp -O -q "$SCRIPT_DIR/archer_c6_helper.sh" "$ROUTER_USER@$ROUTER_IP":/www/cgi-bin/api
 
+# 3b. Copy openNDS sync daemon to /usr/bin/opennds_sync.sh
+if [ -f "$SCRIPT_DIR/sync.sh" ]; then
+    printf "🔄 Syncing daemon to /usr/bin/opennds_sync.sh...\n"
+    scp -O -q "$SCRIPT_DIR/sync.sh" "$ROUTER_USER@$ROUTER_IP":/usr/bin/opennds_sync.sh
+    ssh -q "$ROUTER_USER@$ROUTER_IP" "chmod +x /usr/bin/opennds_sync.sh && /etc/init.d/opennds_sync restart 2>/dev/null || true"
+fi
+
+# 3c. Copy openNDS binauth hook to /etc/opennds/binauth.sh
+if [ -f "$SCRIPT_DIR/binauth.sh" ]; then
+    printf "🛡️ Syncing openNDS binauth hook to /etc/opennds/binauth.sh...\n"
+    scp -O -q "$SCRIPT_DIR/binauth.sh" "$ROUTER_USER@$ROUTER_IP":/etc/opennds/binauth.sh
+    ssh -q "$ROUTER_USER@$ROUTER_IP" "chmod +x /etc/opennds/binauth.sh"
+fi
+
 # 4. Set execution permissions & reload web server
 printf "🔒 Setting execution permissions & refreshing uhttpd...\n"
-ssh -q "$ROUTER_USER@$ROUTER_IP" "chmod +x /www/cgi-bin/api /usr/lib/archer_guard/*.sh && /etc/init.d/uhttpd reload"
+ssh -q "$ROUTER_USER@$ROUTER_IP" "chmod +x /www/cgi-bin/api /usr/lib/archer_guard/*.sh && chmod 700 /etc/archer_guard_backup /tmp/archer_sessions 2>/dev/null && /etc/init.d/uhttpd reload"
 
 # 4b. Sync Modern Pro Theme Enhancements (if present)
 if [ -f "$SCRIPT_DIR/modern-enhancements.css" ]; then

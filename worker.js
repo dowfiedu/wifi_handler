@@ -7,6 +7,31 @@
  * - Falls back to static assets (`public/`) via `env.ASSETS.fetch()`.
  */
 
+// Cloudflare Workers fetch implementation does not support the 'cache' field in RequestInit
+if (typeof globalThis.fetch === 'function') {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = function (input, init) {
+    if (init && typeof init === 'object' && 'cache' in init) {
+      const { cache, ...rest } = init;
+      return originalFetch.call(this, input, rest);
+    }
+    return originalFetch.call(this, input, init);
+  };
+}
+if (typeof globalThis.Request === 'function') {
+  const OriginalRequest = globalThis.Request;
+  globalThis.Request = class extends OriginalRequest {
+    constructor(input, init) {
+      if (init && typeof init === 'object' && 'cache' in init) {
+        const { cache, ...rest } = init;
+        super(input, rest);
+      } else {
+        super(input, init);
+      }
+    }
+  };
+}
+
 import requestHandler from './api/request.js';
 import webhookHandler from './api/webhook.js';
 import pollHandler from './api/poll.js';

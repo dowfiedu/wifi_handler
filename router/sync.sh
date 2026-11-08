@@ -9,7 +9,7 @@
 [ -f /etc/opennds/sync.conf ] && . /etc/opennds/sync.conf
 [ -f ./sync.conf ] && . ./sync.conf
 
-API_URL="${API_URL:-https://your-deployment.vercel.app/api/poll}"
+API_URL="${API_URL:-https://wifi-handler.wifizonesr.workers.dev/api/poll}"
 ROUTER_SECRET_KEY="${ROUTER_SECRET_KEY:-change_this_secret_key}"
 # Precision Quota-Optimized Polling Profile (Target: 25% - 30% monthly Upstash quota = ~5,000 commands/day)
 POLL_INTERVAL_ACTIVE="${POLL_INTERVAL_ACTIVE:-5}"; POLL_INTERVAL_BURST="${POLL_INTERVAL_BURST:-5}"

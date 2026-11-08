@@ -4,6 +4,8 @@
 set -e
 
 # Extract helper functions from router/sync.sh into a test environment
+eval "$(sed -n '/^is_valid_mac()/,/^}/p' router/sync.sh)"
+eval "$(sed -n '/^is_single_command_safe()/,/^}/p' router/sync.sh)"
 eval "$(sed -n '/^parse_json_field()/,/^}/p' router/sync.sh)"
 eval "$(sed -n '/^parse_command()/,/^}/p' router/sync.sh)"
 eval "$(sed -n '/^parse_mac()/,/^}/p' router/sync.sh)"

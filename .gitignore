@@ -76,3 +76,5 @@ release-output/
 *.tmp
 .agents/
 .kotlin/
+
+.wrangler/

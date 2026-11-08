@@ -21,8 +21,6 @@ backup_baseline() {
     if [ ! -f "$BACKUP_DIR/firewall" ] && [ -f "/etc/config/firewall" ]; then
         cp -p "/etc/config/firewall" "$BACKUP_DIR/firewall"
         logger -t "$LOG_TAG" "Backed up pristine baseline for /etc/config/firewall"
-    elif fw4 -q check >/dev/null 2>&1 && nft list tables 2>/dev/null | grep -q "table inet fw4"; then
-        cp -f "/etc/config/firewall" "$BACKUP_DIR/firewall"
     fi
 }
 

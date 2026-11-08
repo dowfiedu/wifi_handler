@@ -50,21 +50,24 @@ if ! command -v wg >/dev/null 2>&1; then
     }
 fi
 
+umask 077
 mkdir -p "$WG_DIR"
 chmod 700 "$WG_DIR"
 
 # 2. Key Generation
 printf "🔑 Generating Cryptographic Keypairs (Curve25519)...\n"
 if [ ! -f "$WG_DIR/server.key" ]; then
-    wg genkey | tee "$WG_DIR/server.key" | wg pubkey > "$WG_DIR/server.pub"
+    wg genkey > "$WG_DIR/server.key"
     chmod 600 "$WG_DIR/server.key"
+    wg pubkey < "$WG_DIR/server.key" > "$WG_DIR/server.pub"
 fi
 SERVER_PRIVKEY=$(cat "$WG_DIR/server.key")
 SERVER_PUBKEY=$(cat "$WG_DIR/server.pub")
 
 if [ ! -f "$WG_DIR/client.key" ]; then
-    wg genkey | tee "$WG_DIR/client.key" | wg pubkey > "$WG_DIR/client.pub"
+    wg genkey > "$WG_DIR/client.key"
     chmod 600 "$WG_DIR/client.key"
+    wg pubkey < "$WG_DIR/client.key" > "$WG_DIR/client.pub"
 fi
 CLIENT_PRIVKEY=$(cat "$WG_DIR/client.key")
 CLIENT_PUBKEY=$(cat "$WG_DIR/client.pub")
@@ -91,28 +94,48 @@ uci set network.wg_client.persistent_keepalive='25'
 
 uci commit network
 
-# 4. UCI Firewall Configuration
-printf "🛡️ Configuring Firewall rules & LAN zone binding...\n"
+# 4. UCI Firewall Configuration & Dedicated VPN Zone Isolation
+printf "🛡️ Configuring Firewall rules & dedicated VPN zone isolation...\n"
 
 # Delete any existing WireGuard rule to prevent duplicates
 while uci -q delete firewall.allow_wireguard 2>/dev/null; do :; done
 
-# Allow UDP WG_PORT from WAN
-uci set firewall.allow_wireguard=rule
-uci set firewall.allow_wireguard.name='Allow-WireGuard-Inbound'
-uci set firewall.allow_wireguard.src='wan'
-uci set firewall.allow_wireguard.dest_port="$WG_PORT"
-uci set firewall.allow_wireguard.proto='udp'
-uci set firewall.allow_wireguard.target='ACCEPT'
+# Remove wg0 from trusted LAN zone
+uci -q del_list firewall.@zone[0].network="$WG_IFACE" 2>/dev/null || true
 
-# Ensure wg0 is in the LAN firewall zone so it can access router services and LAN
-_lan_networks=$(uci -q get firewall.@zone[0].network 2>/dev/null || echo "lan")
-case " $_lan_networks " in
-    *" $WG_IFACE "*) ;;
-    *)
-        uci add_list firewall.@zone[0].network="$WG_IFACE"
-        ;;
-esac
+# Create dedicated 'vpn' firewall zone (Neutralizes VULN-WG-01)
+uci -q delete firewall.vpn_zone 2>/dev/null || true
+uci set firewall.vpn_zone=zone
+uci set firewall.vpn_zone.name='vpn'
+uci set firewall.vpn_zone.network="$WG_IFACE"
+uci set firewall.vpn_zone.input='REJECT'
+uci set firewall.vpn_zone.output='ACCEPT'
+uci set firewall.vpn_zone.forward='REJECT'
+
+# Allow WireGuard clients to access router DNS and administrative Web/API (HTTP & HTTPS)
+uci -q delete firewall.allow_vpn_api 2>/dev/null || true
+uci set firewall.allow_vpn_api=rule
+uci set firewall.allow_vpn_api.name='Allow-VPN-API'
+uci set firewall.allow_vpn_api.src='vpn'
+uci set firewall.allow_vpn_api.dest_port='53 80 443'
+uci set firewall.allow_vpn_api.proto='tcp udp'
+uci set firewall.allow_vpn_api.target='ACCEPT'
+
+# Allow VPN forwarding strictly to WAN (Internet access only, no LAN peering)
+uci -q delete firewall.vpn_to_wan 2>/dev/null || true
+uci set firewall.vpn_to_wan=forwarding
+uci set firewall.vpn_to_wan.src='vpn'
+uci set firewall.vpn_to_wan.dest='wan'
+
+# Apply WAN rate-limiting to WireGuard port 51820 UDP (Neutralizes VULN-FW-04)
+uci -q delete firewall.wg_wan_rate 2>/dev/null || true
+uci set firewall.wg_wan_rate=rule
+uci set firewall.wg_wan_rate.name='Rate-Limit-WireGuard'
+uci set firewall.wg_wan_rate.src='wan'
+uci set firewall.wg_wan_rate.dest_port="$WG_PORT"
+uci set firewall.wg_wan_rate.proto='udp'
+uci set firewall.wg_wan_rate.limit='10/sec'
+uci set firewall.wg_wan_rate.target='ACCEPT'
 
 uci commit firewall
 
@@ -134,10 +157,10 @@ PersistentKeepalive = 25
 EOF
 chmod 600 "$CLIENT_CONF"
 
-# 6. Apply Changes
-printf "🔄 Reloading network & firewall subsystems...\n"
-/etc/init.d/network restart
-/etc/init.d/firewall restart
+# 6. Apply Changes (Non-Disruptive Zero-Downtime Reload)
+printf "🔄 Reloading WireGuard interface & firewall subsystems (Zero Downtime)...\n"
+ubus call network.interface.wg0 reload 2>/dev/null || ifup wg0 2>/dev/null || true
+/etc/init.d/firewall reload >/dev/null 2>&1 || true
 
 # 7. Display Results & QR Code
 printf "\n=======================================================\n"
@@ -148,9 +171,9 @@ printf "Public Endpoint:   %s:%s\n" "$ENDPOINT_HOST" "$WG_PORT"
 printf "Client Address:    %s/24\n" "$CLIENT_IP"
 printf "Configuration:     %s\n\n" "$CLIENT_CONF"
 
-printf "📄 Client Profile Content:\n"
+printf "📄 Client Profile (Permissions: 600):\n"
 printf -- "-------------------------------------------------------\n"
-cat "$CLIENT_CONF"
+printf "Saved securely to %s\n" "$CLIENT_CONF"
 printf -- "-------------------------------------------------------\n\n"
 
 if command -v qrencode >/dev/null 2>&1; then

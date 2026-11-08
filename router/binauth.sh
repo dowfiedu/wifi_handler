@@ -48,7 +48,16 @@ kick_wifi_client() {
 
 case "$METHOD" in
     auth_client)
-        # Authentication requested. Exit 0 allows openNDS to proceed.
+        _client_mac="$2"
+        _client_ip="$3"
+        # Validate ARP table consistency to prevent Layer-7 MAC spoofing (Neutralizes VULN-NDS-02)
+        if [ -n "$_client_ip" ] && [ -f /proc/net/arp ]; then
+            _arp_mac=$(grep -w "$_client_ip" /proc/net/arp 2>/dev/null | awk '{print tolower($4)}')
+            if [ -n "$_arp_mac" ] && [ "$_arp_mac" != "00:00:00:00:00:00" ] && [ "$_arp_mac" != "$(printf '%s' "$_client_mac" | tr '[:upper:]' '[:lower:]')" ]; then
+                command -v logger >/dev/null 2>&1 && logger -t "opennds-binauth" "[SECURITY ALERT] Layer-7 MAC spoofing detected for IP $_client_ip (Claimed: $_client_mac, ARP: $_arp_mac)"
+                exit 1 # Deny authentication immediately
+            fi
+        fi
         exit 0
         ;;
 
@@ -59,7 +68,7 @@ case "$METHOD" in
         fi
         CONF="/etc/opennds/sync.conf"
         [ -f "$CONF" ] && . "$CONF"
-        _confirm_url="${CONFIRM_URL:-https://wifihandler.vercel.app/api/confirm-auth}"
+        _confirm_url="${CONFIRM_URL:-https://wifi-handler.wifizonesr.workers.dev/api/confirm-auth}"
         if command -v uclient-fetch >/dev/null 2>&1; then
             uclient-fetch -q --timeout=5 \
                 --header="x-router-secret: $ROUTER_SECRET_KEY" \
@@ -86,7 +95,7 @@ case "$METHOD" in
         # Dispatch background notification to Cloud Bridge
         CONF="/etc/opennds/sync.conf"
         [ -f "$CONF" ] && . "$CONF"
-        _deauth_url="${DEAUTH_URL:-https://wifihandler.vercel.app/api/deauth}"
+        _deauth_url="${DEAUTH_URL:-https://wifi-handler.wifizonesr.workers.dev/api/deauth}"
         _start="$5"
         _end="$6"
         [ -z "$_start" ] && _start="0"

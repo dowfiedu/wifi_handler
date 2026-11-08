@@ -57,65 +57,77 @@ execute_control() {
                 esac
             else _status="error"; _msg="Target MAC required"; fi ;;
         "nds_auth"|"nds_deauth"|"deauth")
-            if command -v ndsctl >/dev/null 2>&1 && [ -n "$_target" ]; then
-                [ "$_cmd" = "nds_auth" ] && ndsctl auth "$_target" "${_val:-120}" >/dev/null 2>&1 || ndsctl deauth "$_target" >/dev/null 2>&1
-                _msg="openNDS $_cmd executed for $_target"
-            else _status="error"; _msg="openNDS not active or invalid MAC"; fi ;;
+            case "$_target" in
+                [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F])
+                    if command -v ndsctl >/dev/null 2>&1; then
+                        [ "$_cmd" = "nds_auth" ] && ndsctl auth "$_target" "${_val:-120}" >/dev/null 2>&1 || ndsctl deauth "$_target" >/dev/null 2>&1
+                        _msg="openNDS $_cmd executed for $_target"
+                    else _status="error"; _msg="openNDS not active"; fi ;;
+                *) _status="error"; _msg="Invalid target MAC address format" ;;
+            esac ;;
         "kick_client"|"disconnect_client")
-            if [ -n "$_target" ]; then
-                for _h in /var/run/hostapd-phy* /var/run/hostapd/wlan* /var/run/hostapd/phy*; do [ -e "$_h" ] && hostapd_cli -p "$_h" deauthenticate "$_target" 2>/dev/null; done
-                if command -v ubus >/dev/null 2>&1; then for _if in $(ubus list hostapd.* 2>/dev/null); do ubus call "$_if" del_client "{\"addr\":\"$_target\",\"reason\":1,\"deauth\":true}" 2>/dev/null; done; fi
-                command -v ndsctl >/dev/null 2>&1 && ndsctl deauth "$_target" 2>/dev/null; _msg="Client $_target disconnected"
-            else _status="error"; _msg="Target MAC required"; fi ;;
+            case "$_target" in
+                [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F])
+                    for _h in /var/run/hostapd-phy* /var/run/hostapd/wlan* /var/run/hostapd/phy*; do [ -e "$_h" ] && hostapd_cli -p "$_h" deauthenticate "$_target" 2>/dev/null; done
+                    if command -v ubus >/dev/null 2>&1; then for _if in $(ubus list hostapd.* 2>/dev/null); do ubus call "$_if" del_client "{\"addr\":\"$_target\",\"reason\":1,\"deauth\":true}" 2>/dev/null; done; fi
+                    command -v ndsctl >/dev/null 2>&1 && ndsctl deauth "$_target" 2>/dev/null; _msg="Client $_target disconnected" ;;
+                *) _status="error"; _msg="Invalid target MAC address format" ;;
+            esac ;;
         "set_static_lease"|"del_static_lease")
-            if [ -n "$_target" ]; then
-                _sec="host_$(echo "$_target" | tr -d ':')"
-                if [ "$_cmd" = "set_static_lease" ] && [ -n "$_val" ]; then
-                    uci set dhcp."$_sec"="host"; uci set dhcp."$_sec".mac="$_target"; uci set dhcp."$_sec".ip="$_val"
-                    _hname=$(extract_param "extra" "$_payload"); [ -z "$_hname" ] && _hname=$(extract_param "hostname" "$_payload")
-                    if [ -n "$_hname" ]; then
-                        _safe_host=$(printf "%s" "$_hname" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g; s/--*/-/g; s/^-//; s/-$//' | cut -c1-30)
-                        [ -n "$_safe_host" ] && uci set dhcp."$_sec".name="$_safe_host"
+            case "$_target" in
+                [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F])
+                    _sec="host_$(echo "$_target" | tr -d ':')"
+                    if [ "$_cmd" = "set_static_lease" ] && [ -n "$_val" ]; then
+                        uci set dhcp."$_sec"="host"; uci set dhcp."$_sec".mac="$_target"; uci set dhcp."$_sec".ip="$_val"
+                        _hname=$(extract_param "extra" "$_payload"); [ -z "$_hname" ] && _hname=$(extract_param "hostname" "$_payload")
+                        if [ -n "$_hname" ]; then
+                            _safe_host=$(printf "%s" "$_hname" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g; s/--*/-/g; s/^-//; s/-$//' | cut -c1-30)
+                            [ -n "$_safe_host" ] && uci set dhcp."$_sec".name="$_safe_host"
+                        fi
+                        _msg="Static lease for $_target reserved as $_val"
+                    else
+                        uci delete dhcp."$_sec" 2>/dev/null; _msg="Static lease for $_target removed"
                     fi
-                    _msg="Static lease for $_target reserved as $_val"
-                else
-                    uci delete dhcp."$_sec" 2>/dev/null; _msg="Static lease for $_target removed"
-                fi
-                uci commit dhcp
-                if command -v dnsmasq >/dev/null 2>&1 && ! dnsmasq --test >/dev/null 2>&1; then
-                    uci revert dhcp; _status="error"; _msg="dnsmasq syntax check failed; reverted dhcp config"
-                else /etc/init.d/dnsmasq reload >/dev/null 2>&1 & fi
-            else _status="error"; _msg="Target MAC required"; fi ;;
+                    uci commit dhcp
+                    if command -v dnsmasq >/dev/null 2>&1 && ! dnsmasq --test >/dev/null 2>&1; then
+                        uci revert dhcp; _status="error"; _msg="dnsmasq syntax check failed; reverted dhcp config"
+                    else /etc/init.d/dnsmasq reload >/dev/null 2>&1 & fi ;;
+                *) _status="error"; _msg="Invalid target MAC address format" ;;
+            esac ;;
         "rename_client")
-            if [ -n "$_target" ]; then
-                _target_m=$(echo "$_target" | tr '[:upper:]' '[:lower:]')
-                _cfg="/etc/archer_guard_clients.conf"; touch "$_cfg"
-                _prev_dl=0; _prev_ul=0
-                _match=$(grep -i "^$_target_m|" "$_cfg" 2>/dev/null)
-                if [ -n "$_match" ]; then
-                    _prev_dl=$(echo "$_match" | cut -d'|' -f3); _prev_ul=$(echo "$_match" | cut -d'|' -f4)
-                    sed -i "/^$_target_m|/d" "$_cfg"
-                fi
-                _clean_val=$(printf "%s" "$_val" | tr '|' ' ' | tr '\n' ' ' | head -c 64)
-                echo "$_target_m|$_clean_val|${_prev_dl:-0}|${_prev_ul:-0}" >> "$_cfg"
-                _msg="Client $_target renamed to $_val"
-            else _status="error"; _msg="Target MAC required"; fi ;;
+            case "$_target" in
+                [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F])
+                    _target_m=$(echo "$_target" | tr '[:upper:]' '[:lower:]')
+                    _cfg="/etc/archer_guard_clients.conf"; touch "$_cfg"
+                    _prev_dl=0; _prev_ul=0
+                    _match=$(grep -i "^$_target_m|" "$_cfg" 2>/dev/null)
+                    if [ -n "$_match" ]; then
+                        _prev_dl=$(echo "$_match" | cut -d'|' -f3); _prev_ul=$(echo "$_match" | cut -d'|' -f4)
+                        sed -i "/^$_target_m|/d" "$_cfg"
+                    fi
+                    _clean_val=$(printf "%s" "$_val" | tr '|' ' ' | tr '\n' ' ' | head -c 64)
+                    echo "$_target_m|$_clean_val|${_prev_dl:-0}|${_prev_ul:-0}" >> "$_cfg"
+                    _msg="Client $_target renamed to $_val" ;;
+                *) _status="error"; _msg="Invalid target MAC address format" ;;
+            esac ;;
         "set_speed_limit")
-            if [ -n "$_target" ]; then
-                _target_m=$(echo "$_target" | tr '[:upper:]' '[:lower:]')
-                _cfg="/etc/archer_guard_clients.conf"; touch "$_cfg"
-                _dl=$(extract_param "download_limit_kbps" "$_payload"); [ -z "$_dl" ] && _dl="${_val:-0}"
-                _ul=$(extract_param "upload_limit_kbps" "$_payload"); [ -z "$_ul" ] && _ul="0"
-                _clear=$(extract_param "clear" "$_payload")
-                [ "$_val" = "unlimited" ] || [ "$_dl" = "unlimited" ] && _clear="true"
-                _prev_name=""
-                _match=$(grep -i "^$_target_m|" "$_cfg" 2>/dev/null)
-                [ -n "$_match" ] && { _prev_name=$(echo "$_match" | cut -d'|' -f2); sed -i "/^$_target_m|/d" "$_cfg"; }
-                if [ "$_clear" = "true" ] || [ "$_dl" = "0" ] || [ -z "$_dl" ]; then
-                    [ -n "$_prev_name" ] && echo "$_target_m|$_prev_name|0|0" >> "$_cfg"
-                else echo "$_target_m|$_prev_name|$_dl|${_ul:-0}" >> "$_cfg"; fi
-                apply_client_rate_limits; _msg="Speed limit for $_target updated"
-            else _status="error"; _msg="Target MAC required"; fi ;;
+            case "$_target" in
+                [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F])
+                    _target_m=$(echo "$_target" | tr '[:upper:]' '[:lower:]')
+                    _cfg="/etc/archer_guard_clients.conf"; touch "$_cfg"
+                    _dl=$(extract_param "download_limit_kbps" "$_payload"); [ -z "$_dl" ] && _dl="${_val:-0}"
+                    _ul=$(extract_param "upload_limit_kbps" "$_payload"); [ -z "$_ul" ] && _ul="0"
+                    _clear=$(extract_param "clear" "$_payload")
+                    [ "$_val" = "unlimited" ] || [ "$_dl" = "unlimited" ] && _clear="true"
+                    _prev_name=""
+                    _match=$(grep -i "^$_target_m|" "$_cfg" 2>/dev/null)
+                    [ -n "$_match" ] && { _prev_name=$(echo "$_match" | cut -d'|' -f2); sed -i "/^$_target_m|/d" "$_cfg"; }
+                    if [ "$_clear" = "true" ] || [ "$_dl" = "0" ] || [ -z "$_dl" ]; then
+                        [ -n "$_prev_name" ] && echo "$_target_m|$_prev_name|0|0" >> "$_cfg"
+                    else echo "$_target_m|$_prev_name|$_dl|${_ul:-0}" >> "$_cfg"; fi
+                    apply_client_rate_limits; _msg="Speed limit for $_target updated" ;;
+                *) _status="error"; _msg="Invalid target MAC address format" ;;
+            esac ;;
         "drop_caches")
             echo 3 > /proc/sys/vm/drop_caches 2>/dev/null; _msg="Kernel RAM caches cleared" ;;
         "wol")
@@ -209,23 +221,77 @@ execute_control() {
                 uci set network.wan.peerdns='0'; uci delete network.wan.dns 2>/dev/null; uci add_list network.wan.dns="$_v1"; [ -n "$_v2" ] && uci add_list network.wan.dns="$_v2"; _msg="Custom DNS set to $_v1${_v2:+, $_v2}"
             else uci set network.wan.peerdns='1'; uci delete network.wan.dns 2>/dev/null; _msg="DNS reset to automatic ISP"; fi
             uci get network.lan.ipaddr >/dev/null 2>&1 || uci revert network
-            uci commit network && (/etc/init.d/network reload >/dev/null 2>&1 &) ;;
+            uci commit network && (/etc/init.d/dnsmasq reload >/dev/null 2>&1 &) ;;
         "raw_cmd")
-            [ -z "$_val" ] && _val="uptime"
-            # SECURITY FILTER: Block metacharacters and command chaining
-            case "$_val" in
+            # Support 'value' parameter (dispatched by Android App RouterViewModel.kt:358 and Web UI) as well as 'subcmd'
+            _raw_target="$_val"
+            [ -z "$_raw_target" ] && _raw_target=$(extract_param "subcmd" "$_payload")
+            [ -z "$_raw_target" ] && _raw_target="uptime"
+
+            # Strict metacharacter and command chaining filter (neutralizes shell command injection)
+            case "$_raw_target" in
                 *[\;\&\|\`\(\)\>\<]*|*[\$]*|*"
 "*)
-                    send_header; printf '{"status":"error","message":"SECURITY ALERT: Metacharacters and command chaining blocked","blocked":true}\n'; exit 0 ;;
+                    send_header
+                    printf '{"status":"error","message":"SECURITY ALERT: Metacharacters and command chaining blocked","blocked":true}\n'
+                    exit 0
+                    ;;
             esac
-            # WHITELIST FILTER: Allow only verified safe network and diagnostic commands
-            case "$_val" in
-                ping\ *|traceroute\ *|nslookup\ *|logread*|dmesg*|uptime|free*|df*|netstat*|iwinfo*|cat\ /proc/*) ;;
-                *) send_header; printf '{"status":"error","message":"SECURITY ALERT: Command not in diagnostic allowlist","blocked":true}\n'; exit 0 ;;
+
+            # Tokenize diagnostic utility and target argument
+            _diag_tool=$(printf '%s' "$_raw_target" | awk '{print $1}')
+            _diag_target=$(printf '%s' "$_raw_target" | awk '{print $NF}')
+            [ "$_diag_target" = "$_diag_tool" ] && _diag_target=""
+
+            _output=""
+            case "$_diag_tool" in
+                "uptime")
+                    _output=$(uptime 2>&1) ;;
+                "free")
+                    _output=$(free -m 2>&1) ;;
+                "df")
+                    _output=$(df -h 2>&1) ;;
+                "ping")
+                    [ -z "$_diag_target" ] && _diag_target=$(extract_param "host" "$_payload")
+                    case "$_diag_target" in
+                        *[!a-zA-Z0-9.-]*|"") json_error "Invalid target host for ping"; exit 0 ;;
+                        *) _output=$(ping -c 3 -W 2 "$_diag_target" 2>&1) ;;
+                    esac
+                    ;;
+                "traceroute")
+                    [ -z "$_diag_target" ] && _diag_target=$(extract_param "host" "$_payload")
+                    case "$_diag_target" in
+                        *[!a-zA-Z0-9.-]*|"") json_error "Invalid target host for traceroute"; exit 0 ;;
+                        *) _output=$(traceroute -q 1 -w 2 -m 15 "$_diag_target" 2>&1) ;;
+                    esac
+                    ;;
+                "nslookup")
+                    [ -z "$_diag_target" ] && _diag_target=$(extract_param "host" "$_payload")
+                    case "$_diag_target" in
+                        *[!a-zA-Z0-9.-]*|"") json_error "Invalid target domain for nslookup"; exit 0 ;;
+                        *) _output=$(nslookup "$_diag_target" 2>&1) ;;
+                    esac
+                    ;;
+                "logread")
+                    _output=$(logread -l 50 2>&1) ;;
+                "dmesg")
+                    _output=$(dmesg 2>&1 | tail -n 50) ;;
+                "netstat")
+                    _output=$(netstat -tuln 2>&1) ;;
+                "iwinfo")
+                    _output=$(iwinfo 2>&1) ;;
+                *)
+                    send_header
+                    printf '{"status":"error","message":"SECURITY ALERT: Command not in diagnostic allowlist","blocked":true}\n'
+                    exit 0
+                    ;;
             esac
-            _output=$($_val 2>&1 | head -n 60)
+
+            # Safe JSON array serialization of multi-line diagnostic output
             _json_out=$(printf '%s\n' "$_output" | sed 's/\\/\\\\/g; s/"/\\"/g' | awk 'BEGIN{printf "["} NR>1{printf ","} {printf "\"%s\"", $0} END{print "]"}')
-            send_header; printf '{"status":"ok","command":"%s","output":%s}\n' "$_val" "$_json_out"; exit 0 ;;
+            send_header
+            printf '{"status":"ok","command":"%s","output":%s}\n' "$_diag_tool" "$_json_out"
+            exit 0 ;;
         "set_smp_steering")
             _s="${_val:-1}"; [ "$_s" = "on" ] || [ "$_s" = "true" ] && _s="1"; [ "$_s" = "off" ] || [ "$_s" = "false" ] && _s="0"; _c="$([ "$_s" = "1" ] && echo "f" || echo "0")"; for q in /sys/class/net/*/queues/rx-*/rps_cpus; do [ -e "$q" ] && echo "$_c" > "$q" 2>/dev/null; done; uci set system.@system[0].smp_steering="$_s" 2>/dev/null && uci commit system 2>/dev/null; _msg="SMP Packet Steering set to $_s" ;;
         "set_wps_action")
@@ -233,11 +299,36 @@ execute_control() {
         "set_dns_rebind")
             _s="$([ "$_val" = "off" ] || [ "$_val" = "0" ] && echo 0 || echo 1)"; uci set dhcp.@dnsmasq[0].rebind_protection="$_s" && uci commit dhcp && /etc/init.d/dnsmasq reload >/dev/null 2>&1 & _msg="DNS Rebind Protection set to $_s" ;;
         "set_wan_lockdown")
-            _s="$([ "$_val" = "off" ] || [ "$_val" = "0" ] && echo 0 || echo 1)"; uci set firewall.@defaults[0].input="$([ "$_s" = "1" ] && echo 'DROP' || echo 'ACCEPT')"; uci commit firewall && /etc/init.d/firewall reload >/dev/null 2>&1 & _msg="WAN Management Lockdown set to $_s" ;;
+            _s="$([ "$_val" = "off" ] || [ "$_val" = "0" ] && echo 0 || echo 1)"
+            
+            # 1. Ensure global default policy is PERMANENTLY DROP (Never ACCEPT!)
+            uci set firewall.@defaults[0].input='DROP'
+            
+            # 2. Control lockdown strictly via dedicated WAN rules
+            if [ "$_s" = "1" ]; then
+                # Lockdown Active: Ensure all WAN management rules are deleted
+                uci -q delete firewall.allow_wan_management 2>/dev/null
+            else
+                # Lockdown Inactive: If remote management requested, reject or constrain to specific IP
+                uci set firewall.allow_wan_management=rule
+                uci set firewall.allow_wan_management.name='WAN-Management-Restricted'
+                uci set firewall.allow_wan_management.src='wan'
+                uci set firewall.allow_wan_management.dest_port='22 80 443'
+                uci set firewall.allow_wan_management.proto='tcp'
+                uci set firewall.allow_wan_management.target='REJECT'
+            fi
+            
+            uci commit firewall && (/etc/init.d/firewall reload >/dev/null 2>&1 &)
+            _msg="WAN Lockdown securely set to $_s (Global defaults preserved)" ;;
         "harden_security")
             uci set dhcp.@dnsmasq[0].rebind_protection='1' && uci commit dhcp && /etc/init.d/dnsmasq reload >/dev/null 2>&1 & uci set wireless.default_radio0.ieee80211w='1'; uci set wireless.default_radio1.ieee80211w='1'; uci commit wireless && wifi reload >/dev/null 2>&1 & _msg="Router Security Hardened" ;;
         "backup_config")
-            _bpath="/tmp/backup-OpenWrt-c6.tar.gz"; sysupgrade -b "$_bpath" 2>/dev/null || tar -czf "$_bpath" -C / etc/config etc/shadow 2>/dev/null; _msg="Configuration archive generated at $_bpath" ;;
+            _bdir="/etc/archer_guard_backup"
+            mkdir -p "$_bdir" && chmod 700 "$_bdir"
+            _bpath="$_bdir/backup-$(date +%Y%m%d%H%M%S).tar.gz"
+            ( umask 077 && ( sysupgrade -b "$_bpath" 2>/dev/null || tar -czf "$_bpath" -C / etc/config etc/shadow 2>/dev/null ) )
+            chmod 600 "$_bpath"
+            _msg="Configuration archive securely generated at $_bpath" ;;
         "set_quota"|"reset_quota"|"set_client_quota"|"toggle_cron_task"|"set_cron_schedule"|"set_homeassistant_webhook"|"trigger_ha_webhook")
             handle_analytics_action "$_cmd" "$_target" "$_val" "$_payload"; exit 0 ;;
         *) _status="error"; _msg="Unknown command: $_cmd" ;;

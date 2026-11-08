@@ -54,7 +54,8 @@ case "$ACTION" in
         _token=$(extract_param "token" "$_payload")
         [ -z "$_token" ] && _token="$HTTP_X_ROUTER_SESSION"
         if [ -n "$_token" ]; then
-            rm -f "/tmp/archer_sessions/$_token" 2>/dev/null
+            _clean_tok=$(sanitize_token "$_token")
+            [ -n "$_clean_tok" ] && rm -f "/tmp/archer_sessions/$_clean_tok" 2>/dev/null
             command -v ubus >/dev/null 2>&1 && ubus -t 2 call session destroy "{\"ubus_rpc_session\":\"$_token\"}" 2>/dev/null
         fi
         json_ok "Logged out successfully"
